@@ -1,0 +1,44 @@
+# Certificate files - NEVER commit private keys
+certs/
+*.key
+*.crt
+*.pem
+*.pfx
+*.p12
+*.csr
+*.srl
+*.ext
+
+# Deployment outputs
+deployment-info.json
+
+# SSH keys
+*.pub
+id_rsa*
+
+# Azure CLI
+.azure/
+
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# IDE files
+.vscode/
+.idea/
+*.iml
+
+# Backup files
+*.bak
+*.backup

@@ -1,0 +1,109 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+
+packages:
+  - nginx
+  - openssl
+
+write_files:
+  - path: /etc/nginx/sites-available/default
+    content: |
+      server {
+          listen 443 ssl;
+          server_name _;
+          
+          ssl_certificate /etc/nginx/ssl/server.crt;
+          ssl_certificate_key /etc/nginx/ssl/server.key;
+          ssl_client_certificate /etc/nginx/ssl/ca.crt;
+          ssl_verify_client on;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_ciphers HIGH:!aNULL:!MD5;
+          
+          root /var/www/html;
+          index index.html;
+          
+          location / {
+              try_files $uri $uri/ =404;
+          }
+      }
+  
+  - path: /var/www/html/index.html
+    content: |
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+          <meta charset="UTF-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <title>Host2 - Blue</title>
+          <style>
+              body {
+                  margin: 0;
+                  padding: 0;
+                  display: flex;
+                  justify-content: center;
+                  align-items: center;
+                  min-height: 100vh;
+                  background: linear-gradient(135deg, #4dabf7 0%, #228be6 100%);
+                  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+              }
+              .container {
+                  text-align: center;
+                  background: rgba(255, 255, 255, 0.95);
+                  padding: 60px 80px;
+                  border-radius: 20px;
+                  box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+              }
+              h1 {
+                  color: #1864ab;
+                  font-size: 4em;
+                  margin: 0;
+                  text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+              }
+              p {
+                  color: #495057;
+                  font-size: 1.5em;
+                  margin-top: 20px;
+              }
+              .badge {
+                  display: inline-block;
+                  background: #1864ab;
+                  color: white;
+                  padding: 10px 30px;
+                  border-radius: 50px;
+                  margin-top: 20px;
+                  font-weight: bold;
+                  font-size: 1.2em;
+              }
+              .mtls-indicator {
+                  margin-top: 30px;
+                  padding: 20px;
+                  background: #d3f9d8;
+                  border-left: 4px solid #2f9e44;
+                  border-radius: 5px;
+              }
+              .mtls-indicator h3 {
+                  margin: 0 0 10px 0;
+                  color: #2f9e44;
+              }
+          </style>
+      </head>
+      <body>
+          <div class="container">
+              <h1>🔵 HOST2</h1>
+              <p>You are connected to the BLUE server</p>
+              <div class="badge">Backend Server #2</div>
+              <div class="mtls-indicator">
+                  <h3>🔒 mTLS Secured Connection</h3>
+                  <p style="font-size: 0.9em; margin: 0;">Mutual TLS authentication active</p>
+              </div>
+          </div>
+      </body>
+      </html>
+
+runcmd:
+  - mkdir -p /etc/nginx/ssl
+  - chown -R www-data:www-data /var/www/html
+  - chmod 755 /var/www/html
+  - systemctl enable nginx
+  - echo "Host2 cloud-init complete" > /var/log/cloud-init-done.log
