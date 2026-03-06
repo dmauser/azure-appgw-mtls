@@ -11,14 +11,29 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Configuration
-RESOURCE_GROUP="rg-mtls-lab"
-LOCATION="eastus"
+# Default configuration
+DEFAULT_RESOURCE_GROUP="rg-mtls-lab"
+DEFAULT_LOCATION="eastus"
 DEPLOYMENT_NAME="mtls-lab-deployment-$(date +%s)"
 
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  Azure mTLS Lab Deployment${NC}"
 echo -e "${GREEN}========================================${NC}"
+echo ""
+
+# Prompt for resource group
+echo -e "${YELLOW}Resource Group [${DEFAULT_RESOURCE_GROUP}]: ${NC}\c"
+read -r INPUT_RG
+RESOURCE_GROUP="${INPUT_RG:-$DEFAULT_RESOURCE_GROUP}"
+
+# Prompt for location
+echo -e "${YELLOW}Location [${DEFAULT_LOCATION}]: ${NC}\c"
+read -r INPUT_LOCATION
+LOCATION="${INPUT_LOCATION:-$DEFAULT_LOCATION}"
+
+echo ""
+echo -e "  Resource Group: ${BLUE}${RESOURCE_GROUP}${NC}"
+echo -e "  Location:       ${BLUE}${LOCATION}${NC}"
 echo ""
 
 # Function to check if a command exists
