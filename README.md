@@ -48,10 +48,10 @@ This lab creates a fully automated Azure environment that demonstrates:
           └─────────────────────────┘
                       │
                       ▼
-              ┌──────────────┐
-              │  Key Vault   │
+              ┌───────────────┐
+              │  Key Vault    │
               │ (Certificates)│
-              └──────────────┘
+              └───────────────┘
 ```
 
 ## ✨ Features
