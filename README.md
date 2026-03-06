@@ -112,8 +112,8 @@ Before deploying this lab, ensure you have:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/dmauser/azure-mtls-lab.git
-cd azure-mtls-lab
+git clone https://github.com/dmauser/azure-appgw-mtls.git
+cd azure-appgw-mtls
 ```
 
 ### 2. Login to Azure
@@ -221,7 +221,7 @@ A `configure-mtls.sh` script for automated mTLS configuration will be added in f
 ## 📁 Project Structure
 
 ```
-azure-mtls-lab/
+azure-appgw-mtls/
 ├── main.bicep                 # Main Bicep template
 ├── cloud-init-host1.yaml      # Cloud-init for Host1 (Red)
 ├── cloud-init-host2.yaml      # Cloud-init for Host2 (Blue)
