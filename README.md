@@ -112,7 +112,7 @@ Before deploying this lab, ensure you have:
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/azure-mtls-lab.git
+git clone https://github.com/dmauser/azure-mtls-lab.git
 cd azure-mtls-lab
 ```
 
