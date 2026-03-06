@@ -36,15 +36,16 @@ echo -e "${GREEN}✓ Root CA generated${NC}"
 generate_server_cert() {
     local HOST=$1
     local CN=$2
+    local SHARED_CN=${3:-$CN}
     
     echo -e "${YELLOW}[Generating certificate for $HOST]${NC}"
     
     # Generate private key
     openssl genrsa -out ${HOST}.key 2048
     
-    # Generate CSR
+    # Generate CSR using shared CN so all backends match the same probe hostname
     openssl req -new -key ${HOST}.key -out ${HOST}.csr \
-      -subj "/C=US/ST=Texas/L=Coppell/O=Azure mTLS Lab/OU=Backend Servers/CN=${CN}"
+      -subj "/C=US/ST=Texas/L=Coppell/O=Azure mTLS Lab/OU=Backend Servers/CN=${SHARED_CN}"
     
     # Create OpenSSL extension config
     cat > ${HOST}.ext << EOF
@@ -55,9 +56,10 @@ subjectAltName = @alt_names
 extendedKeyUsage = serverAuth
 
 [alt_names]
-DNS.1 = ${CN}
-DNS.2 = ${HOST}
-DNS.3 = localhost
+DNS.1 = backend.azure.local
+DNS.2 = ${CN}
+DNS.3 = ${HOST}
+DNS.4 = localhost
 IP.1 = 127.0.0.1
 EOF
     
@@ -73,10 +75,10 @@ EOF
 }
 
 echo -e "${YELLOW}[2/5] Generating Host1 (Red) Server Certificate...${NC}"
-generate_server_cert "host1" "host1.azure.local"
+generate_server_cert "host1" "host1.azure.local" "backend.azure.local"
 
 echo -e "${YELLOW}[3/5] Generating Host2 (Blue) Server Certificate...${NC}"
-generate_server_cert "host2" "host2.azure.local"
+generate_server_cert "host2" "host2.azure.local" "backend.azure.local"
 
 echo -e "${YELLOW}[4/5] Generating Client Certificate for Application Gateway...${NC}"
 

@@ -383,19 +383,12 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
     ]
     backendAddressPools: [
       {
-        name: 'backend-host1'
+        name: 'backend-pool'
         properties: {
           backendAddresses: [
             {
               ipAddress: nic1.properties.ipConfigurations[0].properties.privateIPAddress
             }
-          ]
-        }
-      }
-      {
-        name: 'backend-host2'
-        properties: {
-          backendAddresses: [
             {
               ipAddress: nic2.properties.ipConfigurations[0].properties.privateIPAddress
             }
@@ -442,7 +435,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
             id: resourceId('Microsoft.Network/applicationGateways/httpListeners', appGwName, 'http-listener')
           }
           backendAddressPool: {
-            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', appGwName, 'backend-host1')
+            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', appGwName, 'backend-pool')
           }
           backendHttpSettings: {
             id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', appGwName, 'https-settings')
@@ -460,7 +453,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
           timeout: 30
           unhealthyThreshold: 3
           pickHostNameFromBackendHttpSettings: false
-          host: '127.0.0.1'
+          host: 'backend.azure.local'
           match: {
             statusCodes: [
               '200-399'
