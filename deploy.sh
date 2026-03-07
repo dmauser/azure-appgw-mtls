@@ -108,11 +108,12 @@ echo -e "${GREEN}✓ Resource group created${NC}"
 
 # Deploy Bicep template
 echo -e "${YELLOW}[STEP 6/9] Deploying Azure resources (this may take 10-15 minutes)...${NC}"
+CA_CERT_DATA=$(base64 -w 0 certs/ca.crt)
 DEPLOYMENT_OUTPUT=$(az deployment group create \
   --name $DEPLOYMENT_NAME \
   --resource-group $RESOURCE_GROUP \
   --template-file main.bicep \
-  --parameters sshPublicKey="$SSH_PUBLIC_KEY" \
+  --parameters sshPublicKey="$SSH_PUBLIC_KEY" caCertData="$CA_CERT_DATA" \
   --output json)
 
 echo -e "${GREEN}✓ Azure resources deployed${NC}"
@@ -197,7 +198,7 @@ az keyvault secret set \
 echo -e "${GREEN}✓ Certificates uploaded to Key Vault${NC}"
 
 # Deploy certificates to VMs using Azure CLI
-echo -e "${YELLOW}[STEP 9/9] Deploying certificates to backend VMs...${NC}"
+echo -e "${YELLOW}[STEP 9/10] Deploying certificates to backend VMs...${NC}"
 
 # Function to deploy certificates to a VM
 deploy_certs_to_vm() {
@@ -256,6 +257,51 @@ deploy_certs_to_vm "$HOST2_NAME" "host2"
 
 echo -e "${GREEN}✓ Certificates deployed to all VMs${NC}"
 
+# Configure App Gateway HTTPS listener from Key Vault
+echo -e "${YELLOW}[STEP 10/10] Configuring Application Gateway HTTPS listener from Key Vault...${NC}"
+
+# Wait for RBAC propagation of App GW managed identity (assigned during Bicep deploy)
+echo -e "${BLUE}Waiting for App Gateway managed identity RBAC propagation (60 seconds)...${NC}"
+sleep 60
+
+# Get the Key Vault secret ID for the App Gateway SSL certificate
+KV_SECRET_ID=$(az keyvault certificate show \
+  --vault-name $KEY_VAULT_NAME \
+  --name appgw-ssl-cert \
+  --query 'sid' -o tsv)
+echo -e "  KV Secret ID: ${BLUE}${KV_SECRET_ID}${NC}"
+
+# Add the SSL certificate to App Gateway referencing Key Vault
+az network application-gateway ssl-cert create \
+  --gateway-name $APP_GW_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --name appgw-ssl-cert \
+  --key-vault-secret-id $KV_SECRET_ID \
+  --output none
+
+# Create HTTPS listener on port 443
+az network application-gateway http-listener create \
+  --gateway-name $APP_GW_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --name https-listener \
+  --frontend-ip appGwFrontendIp \
+  --frontend-port port-443 \
+  --ssl-cert appgw-ssl-cert \
+  --output none
+
+# Create HTTPS routing rule (higher priority than HTTP rule)
+az network application-gateway rule create \
+  --gateway-name $APP_GW_NAME \
+  --resource-group $RESOURCE_GROUP \
+  --name routing-rule-https \
+  --priority 90 \
+  --http-listener https-listener \
+  --address-pool backend-pool \
+  --http-settings https-settings \
+  --output none
+
+echo -e "${GREEN}✓ App Gateway HTTPS listener configured from Key Vault${NC}"
+
 # Display completion message
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -274,13 +320,11 @@ echo -e "  🔵 Host2 (Blue): $HOST2_NAME ($HOST2_IP)"
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
 echo "1. Wait a few minutes for all services to fully start"
-echo "2. Test the Application Gateway endpoint:"
-echo -e "   ${GREEN}curl http://$APP_GW_FQDN${NC}"
+echo "2. Test the Application Gateway HTTPS endpoint:"
+echo -e "   ${GREEN}curl -k https://$APP_GW_FQDN${NC}"
 echo ""
-echo "3. To configure mTLS on Application Gateway, see README.md"
-echo ""
-echo -e "${YELLOW}Note:${NC} Application Gateway is currently in HTTP mode."
-echo "Follow the README.md instructions to enable HTTPS with mTLS."
+echo "3. Test with the client certificate (full mTLS):"
+echo -e "   ${GREEN}curl --cert certs/appgw-client.crt --key certs/appgw-client.key --cacert certs/ca.crt https://$APP_GW_FQDN${NC}"
 echo ""
 
 # Save deployment info

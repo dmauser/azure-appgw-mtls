@@ -26,6 +26,9 @@ param backendSubnetPrefix string = '10.0.2.0/24'
 @description('Bastion subnet prefix')
 param bastionSubnetPrefix string = '10.0.3.0/24'
 
+@description('Base64-encoded CA certificate for App Gateway to trust backend server certificates')
+param caCertData string
+
 // Variables
 var vnetName = 'vnet-mtls-${uniqueSuffix}'
 var appGwSubnetName = 'snet-appgw'
@@ -337,10 +340,13 @@ resource vmHost2 'Microsoft.Compute/virtualMachines@2023-03-01' = {
   }
 }
 
-// Application Gateway (will be configured post-deployment with certificates)
+// Application Gateway
 resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' = {
   name: appGwName
   location: location
+  identity: {
+    type: 'SystemAssigned'
+  }
   properties: {
     sku: {
       name: 'Standard_v2'
@@ -381,6 +387,14 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
         }
       }
     ]
+    trustedRootCertificates: [
+      {
+        name: 'backend-ca-cert'
+        properties: {
+          data: caCertData
+        }
+      }
+    ]
     backendAddressPools: [
       {
         name: 'backend-pool'
@@ -405,6 +419,11 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
           cookieBasedAffinity: 'Disabled'
           requestTimeout: 30
           pickHostNameFromBackendAddress: false
+          trustedRootCertificates: [
+            {
+              id: resourceId('Microsoft.Network/applicationGateways/trustedRootCertificates', appGwName, 'backend-ca-cert')
+            }
+          ]
           probe: {
             id: resourceId('Microsoft.Network/applicationGateways/probes', appGwName, 'health-probe')
           }
@@ -469,6 +488,18 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
   ]
 }
 
+// Grant App Gateway managed identity access to read Key Vault secrets (needed for KV-referenced SSL certs)
+var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
+resource appGwKvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(keyVault.id, applicationGateway.id, kvSecretsUserRoleId)
+  scope: keyVault
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
+    principalId: applicationGateway.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 // Outputs
 output resourceGroupName string = resourceGroup().name
 output location string = location
@@ -483,3 +514,4 @@ output host2Name string = vmHost2.name
 output host1PrivateIp string = nic1.properties.ipConfigurations[0].properties.privateIPAddress
 output host2PrivateIp string = nic2.properties.ipConfigurations[0].properties.privateIPAddress
 output bastionName string = bastion.name
+output appGwIdentityPrincipalId string = applicationGateway.identity.principalId
