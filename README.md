@@ -156,11 +156,13 @@ chmod +x deploy.sh generateCerts.sh
 The deployment will:
 1. ✅ Check prerequisites
 2. ✅ Generate certificates (Root CA, Server certs, Client cert)
-3. ✅ Create Azure Resource Group
-4. ✅ Deploy infrastructure (VNet, VMs, Application Gateway, Bastion, Key Vault)
-5. ✅ Upload certificates to Key Vault
-6. ✅ Configure backend servers with certificates
-7. ✅ Display deployment information
+3. ✅ Generate a lab-dedicated SSH key pair and store it in Key Vault
+4. ✅ Create Azure Resource Group
+5. ✅ Deploy infrastructure (VNet, VMs, Application Gateway, Bastion, Key Vault)
+6. ✅ Upload certificates to Key Vault
+7. ✅ Store VM SSH credentials (username + private key) in Key Vault
+8. ✅ Configure backend servers with certificates
+9. ✅ Display deployment information
 
 **Deployment time**: ~15-20 minutes
 
@@ -184,7 +186,33 @@ curl http://$APP_GW_FQDN
 
 You should see either the RED (Host1) or BLUE (Host2) page.
 
-### 2. Verify Backend Certificates
+### 2. Retrieve VM SSH Credentials from Key Vault
+
+SSH credentials for both backend VMs are stored securely in Azure Key Vault. To connect via Azure Bastion, first retrieve them:
+
+```bash
+# Get the Key Vault name from the deployment output
+KEY_VAULT_NAME=$(jq -r '.keyVaultName' deployment-info.json)
+
+# Retrieve the admin username
+ADMIN_USER=$(az keyvault secret show \
+  --vault-name $KEY_VAULT_NAME \
+  --name vm-admin-username \
+  --query value -o tsv)
+echo "Admin username: $ADMIN_USER"
+
+# Download the SSH private key
+az keyvault secret show \
+  --vault-name $KEY_VAULT_NAME \
+  --name vm-ssh-private-key \
+  --query value -o tsv > ~/.ssh/lab-vm-key
+chmod 600 ~/.ssh/lab-vm-key
+echo "SSH private key saved to ~/.ssh/lab-vm-key"
+```
+
+Then connect to a VM via Azure Bastion using the retrieved key and username.
+
+### 4. Verify Backend Certificates
 
 Connect to VMs via Azure Bastion and verify nginx is running with certificates:
 
@@ -197,7 +225,7 @@ HOST1=$(az vm list -g $RESOURCE_GROUP --query "[?contains(name, 'host1')].name" 
 az vm run-command invoke   --resource-group $RESOURCE_GROUP   --name $HOST1   --command-id RunShellScript   --scripts "sudo systemctl status nginx"   --query 'value[0].message' -o tsv
 ```
 
-### 3. Test Direct Backend Access (via Bastion)
+### 5. Test Direct Backend Access (via Bastion)
 
 Use Azure Bastion to connect to a VM and test local nginx:
 
@@ -207,7 +235,7 @@ curl -k https://localhost
 # Should display the colored page with mTLS indicator
 ```
 
-### 4. Verify mTLS Configuration
+### 6. Verify mTLS Configuration
 
 Check that the backend requires client certificates:
 
@@ -261,7 +289,9 @@ azure-appgw-mtls/
     ├── host2.key              # Host2 private key
     ├── appgw-client.crt       # App Gateway client certificate
     ├── appgw-client.key       # App Gateway client key
-    └── appgw-ssl.pfx          # PFX bundle for App Gateway
+    ├── appgw-ssl.pfx          # PFX bundle for App Gateway
+    ├── vm-ssh-key             # Lab VM SSH private key (stored in Key Vault)
+    └── vm-ssh-key.pub         # Lab VM SSH public key
 ```
 
 ## 🔐 Certificate Details

@@ -77,22 +77,27 @@ echo -e "  Subscription: ${BLUE}${SUBSCRIPTION_NAME}${NC}"
 echo -e "  ID: ${BLUE}${SUBSCRIPTION_ID}${NC}"
 echo ""
 
-# Generate SSH key if it doesn't exist
-echo -e "${YELLOW}[STEP 3/9] Checking SSH key...${NC}"
-SSH_KEY_PATH="$HOME/.ssh/id_rsa.pub"
-if [ ! -f "$SSH_KEY_PATH" ]; then
-    echo -e "${YELLOW}SSH key not found. Generating new SSH key...${NC}"
-    ssh-keygen -t rsa -b 4096 -f "$HOME/.ssh/id_rsa" -N ""
+# Generate a lab-specific SSH key pair stored in certs/
+echo -e "${YELLOW}[STEP 3/9] Generating SSH key pair for lab VMs...${NC}"
+mkdir -p certs
+SSH_PRIVATE_KEY_PATH="certs/vm-ssh-key"
+SSH_PUBLIC_KEY_PATH="certs/vm-ssh-key.pub"
+if [ ! -f "$SSH_PRIVATE_KEY_PATH" ]; then
+    echo -e "${YELLOW}Generating new SSH key pair for this lab...${NC}"
+    ssh-keygen -t rsa -b 4096 -f "$SSH_PRIVATE_KEY_PATH" -N "" -C "azure-appgw-mtls-lab"
+    chmod 600 "$SSH_PRIVATE_KEY_PATH"
 fi
-SSH_PUBLIC_KEY=$(cat $SSH_KEY_PATH)
-echo -e "${GREEN}✓ SSH key available${NC}"
+SSH_PUBLIC_KEY=$(cat "$SSH_PUBLIC_KEY_PATH")
+echo -e "${GREEN}✓ Lab SSH key pair ready${NC}"
+echo -e "  Private key: ${BLUE}${SSH_PRIVATE_KEY_PATH}${NC} (will be uploaded to Key Vault)"
+echo -e "  Public key:  ${BLUE}${SSH_PUBLIC_KEY_PATH}${NC}"
 
 # Generate certificates
 echo -e "${YELLOW}[STEP 4/9] Generating certificates...${NC}"
-if [ ! -d "certs" ]; then
+if [ ! -f "certs/ca.crt" ]; then
     ./generateCerts.sh
 else
-    echo -e "${BLUE}Certificates directory already exists. Skipping generation.${NC}"
+    echo -e "${BLUE}Certificates already exist. Skipping generation.${NC}"
     echo -e "${BLUE}To regenerate, delete the 'certs' directory and run this script again.${NC}"
 fi
 echo -e "${GREEN}✓ Certificates ready${NC}"
@@ -196,6 +201,24 @@ az keyvault secret set \
   --output none
 
 echo -e "${GREEN}✓ Certificates uploaded to Key Vault${NC}"
+
+# Store SSH credentials in Key Vault
+echo -e "${YELLOW}Storing SSH credentials in Key Vault...${NC}"
+az keyvault secret set \
+  --vault-name $KEY_VAULT_NAME \
+  --name "vm-admin-username" \
+  --value "azureuser" \
+  --output none
+
+az keyvault secret set \
+  --vault-name $KEY_VAULT_NAME \
+  --name "vm-ssh-private-key" \
+  --file "$SSH_PRIVATE_KEY_PATH" \
+  --output none
+
+echo -e "${GREEN}✓ SSH credentials stored in Key Vault${NC}"
+echo -e "  Secret: ${BLUE}vm-admin-username${NC}"
+echo -e "  Secret: ${BLUE}vm-ssh-private-key${NC}"
 
 # Deploy certificates to VMs using Azure CLI
 echo -e "${YELLOW}[STEP 9/10] Deploying certificates to backend VMs...${NC}"
@@ -326,6 +349,12 @@ echo ""
 echo "3. Test with the client certificate (full mTLS):"
 echo -e "   ${GREEN}curl --cert certs/appgw-client.crt --key certs/appgw-client.key --cacert certs/ca.crt https://$APP_GW_FQDN${NC}"
 echo ""
+echo -e "${YELLOW}Accessing VMs via Azure Bastion (SSH credentials from Key Vault):${NC}"
+echo "  Retrieve the SSH private key:"
+echo -e "   ${GREEN}az keyvault secret show --vault-name $KEY_VAULT_NAME --name vm-ssh-private-key --query value -o tsv > ~/.ssh/lab-vm-key && chmod 600 ~/.ssh/lab-vm-key${NC}"
+echo "  Retrieve the admin username:"
+echo -e "   ${GREEN}az keyvault secret show --vault-name $KEY_VAULT_NAME --name vm-admin-username --query value -o tsv${NC}"
+echo ""
 
 # Save deployment info
 cat > deployment-info.json << EOF
@@ -342,6 +371,11 @@ cat > deployment-info.json << EOF
   "host2": {
     "name": "$HOST2_NAME",
     "privateIp": "$HOST2_IP"
+  },
+  "sshCredentials": {
+    "kvSecretUsername": "vm-admin-username",
+    "kvSecretPrivateKey": "vm-ssh-private-key",
+    "retrieveCommand": "az keyvault secret show --vault-name $KEY_VAULT_NAME --name vm-ssh-private-key --query value -o tsv > ~/.ssh/lab-vm-key && chmod 600 ~/.ssh/lab-vm-key"
   },
   "deploymentDate": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
