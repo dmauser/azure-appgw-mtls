@@ -42,6 +42,7 @@ var nsgBackendName = 'nsg-backend-${uniqueSuffix}'
 var keyVaultName = 'kv-mtls-${uniqueSuffix}'
 var host1Name = 'vm-host1-${uniqueSuffix}'
 var host2Name = 'vm-host2-${uniqueSuffix}'
+var appGwIdentityName = 'id-appgw-${uniqueSuffix}'
 
 // Virtual Network
 resource vnet 'Microsoft.Network/virtualNetworks@2023-05-01' = {
@@ -340,12 +341,21 @@ resource vmHost2 'Microsoft.Compute/virtualMachines@2023-03-01' = {
   }
 }
 
+// User-assigned managed identity for App Gateway (SystemAssigned is not supported on this resource type)
+resource appGwIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: appGwIdentityName
+  location: location
+}
+
 // Application Gateway
 resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' = {
   name: appGwName
   location: location
   identity: {
-    type: 'SystemAssigned'
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${appGwIdentity.id}': {}
+    }
   }
   properties: {
     sku: {
@@ -491,11 +501,11 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
 // Grant App Gateway managed identity access to read Key Vault secrets (needed for KV-referenced SSL certs)
 var kvSecretsUserRoleId = '4633458b-17de-408a-b874-0445c86b69e6'
 resource appGwKvRoleAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(keyVault.id, applicationGateway.id, kvSecretsUserRoleId)
+  name: guid(keyVault.id, appGwIdentity.id, kvSecretsUserRoleId)
   scope: keyVault
   properties: {
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', kvSecretsUserRoleId)
-    principalId: applicationGateway.identity.principalId
+    principalId: appGwIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
 }
@@ -514,4 +524,4 @@ output host2Name string = vmHost2.name
 output host1PrivateIp string = nic1.properties.ipConfigurations[0].properties.privateIPAddress
 output host2PrivateIp string = nic2.properties.ipConfigurations[0].properties.privateIPAddress
 output bastionName string = bastion.name
-output appGwIdentityPrincipalId string = applicationGateway.identity.principalId
+output appGwIdentityPrincipalId string = appGwIdentity.properties.principalId
