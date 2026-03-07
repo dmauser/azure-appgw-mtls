@@ -229,9 +229,9 @@ EOFSCRIPT
     sed -i "s/__HOST_NAME__/$CERT_NAME/g" /tmp/deploy-vm-certs.sh
     
     # For this lab, we'll use run-command to deploy certificates
-    # First, copy CA cert
+    # Build a full chain: server cert + CA cert (required by App Gateway to validate the backend chain)
     CA_CERT=$(cat certs/ca.crt | base64 -w 0)
-    SERVER_CERT=$(cat certs/${CERT_NAME}.crt | base64 -w 0)
+    CHAIN_CERT=$(cat certs/${CERT_NAME}.crt certs/ca.crt | base64 -w 0)
     SERVER_KEY=$(cat certs/${CERT_NAME}.key | base64 -w 0)
     
     az vm run-command invoke \
@@ -240,7 +240,7 @@ EOFSCRIPT
       --command-id RunShellScript \
       --scripts \
         "echo '$CA_CERT' | base64 -d | sudo tee /etc/nginx/ssl/ca.crt > /dev/null" \
-        "echo '$SERVER_CERT' | base64 -d | sudo tee /etc/nginx/ssl/server.crt > /dev/null" \
+        "echo '$CHAIN_CERT' | base64 -d | sudo tee /etc/nginx/ssl/server.crt > /dev/null" \
         "echo '$SERVER_KEY' | base64 -d | sudo tee /etc/nginx/ssl/server.key > /dev/null" \
         "sudo chmod 600 /etc/nginx/ssl/server.key" \
         "sudo chown www-data:www-data /etc/nginx/ssl/*" \

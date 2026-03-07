@@ -70,6 +70,9 @@ EOF
     
     # Verify certificate
     openssl verify -CAfile ca.crt ${HOST}.crt
+
+    # Build full chain file (leaf cert + CA) for nginx deployment
+    cat ${HOST}.crt ca.crt > ${HOST}-chain.crt
     
     echo -e "${GREEN}✓ Certificate for $HOST generated and verified${NC}"
 }
