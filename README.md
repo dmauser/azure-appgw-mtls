@@ -7,6 +7,29 @@
 
 A complete, production-ready Azure networking lab demonstrating **Mutual TLS (mTLS)** authentication between Azure Application Gateway and backend Linux VMs running Nginx. This lab features automated certificate generation, infrastructure-as-code deployment using Bicep, and color-coded backend servers for easy visual verification.
 
+## 📑 Table of Contents
+
+- [Overview](#-overview)
+- [Architecture](#️-architecture)
+- [Features](#-features)
+- [Prerequisites](#-prerequisites)
+- [Quick Start](#-quick-start)
+- [Testing the Deployment](#-testing-the-deployment)
+- [Manual mTLS Configuration (Advanced)](#-manual-mtls-configuration-advanced)
+- [Project Structure](#-project-structure)
+- [Certificate Details](#-certificate-details)
+- [Troubleshooting](#️-troubleshooting)
+- [Estimated Cost](#-estimated-cost)
+- [Cleanup](#-cleanup)
+- [Learning Objectives](#-learning-objectives)
+- [Contributing](#-contributing)
+- [License](#-license)
+- [Acknowledgments](#-acknowledgments)
+- [Contact](#-contact)
+- [Related Resources](#-related-resources)
+
+---
+
 ## 🎯 Overview
 
 This lab creates a fully automated Azure environment that demonstrates:
@@ -331,6 +354,32 @@ rm -rf certs/
 ./generateCerts.sh
 ./deploy.sh
 ```
+
+## 💰 Estimated Cost
+
+This lab deploys several Azure resources that incur costs while running. The estimates below are approximate and based on **East US** pricing as of early 2026. Actual costs vary by region and subscription type.
+
+| Resource | SKU / Tier | Est. Cost/Hour | Est. Cost/Day |
+|---|---|---|---|
+| Application Gateway v2 | Standard_v2 (1 CU) | ~$0.246 | ~$5.90 |
+| Azure Bastion | Basic | ~$0.19 | ~$4.56 |
+| VM - Host1 | Standard_B2s | ~$0.042 | ~$1.01 |
+| VM - Host2 | Standard_B2s | ~$0.042 | ~$1.01 |
+| Azure Key Vault | Standard | ~$0.00 | ~$0.03 |
+| Public IPs (x2) | Standard | ~$0.008 | ~$0.19 |
+| Managed Disks (x2) | Standard SSD (32 GB) | ~$0.004 | ~$0.10 |
+| **Total (approx.)** | | **~$0.53** | **~$12.80** |
+
+> **Note**: Application Gateway v2 has a fixed hourly charge plus a per-capacity-unit charge. The estimate above assumes minimal traffic (1 capacity unit). Under load, the Application Gateway cost can increase significantly.
+
+### Cost-Saving Tips
+
+- 🛑 **Delete the lab when not in use** — the biggest savings come from deleting resources entirely (see [Cleanup](#-cleanup) below)
+- ⏸️ **Deallocate VMs** when not testing backends — stops VM compute charges while preserving disks
+- 🏰 **Bastion is the costliest "always-on" component** after App Gateway — consider deleting it and re-deploying when needed for VM access
+- 🔑 **Key Vault** charges are negligible (charged per 10,000 operations), so it has minimal cost impact
+
+---
 
 ## 🧹 Cleanup
 
