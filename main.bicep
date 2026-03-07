@@ -477,7 +477,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
         name: 'health-probe'
         properties: {
           protocol: 'Https'
-          path: '/'
+          path: '/health'
           interval: 30
           timeout: 30
           unhealthyThreshold: 3
