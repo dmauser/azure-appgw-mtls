@@ -29,6 +29,14 @@ param bastionSubnetPrefix string = '10.0.3.0/24'
 @description('Base64-encoded CA certificate for App Gateway to trust backend server certificates')
 param caCertData string
 
+@description('Base64-encoded PFX certificate for Application Gateway HTTPS listener (frontend SSL termination)')
+@secure()
+param appGwSslCertData string
+
+@description('Password for the Application Gateway SSL PFX certificate (empty string if none)')
+@secure()
+param appGwSslCertPassword string = ''
+
 // Variables
 var vnetName = 'vnet-mtls-${uniqueSuffix}'
 var appGwSubnetName = 'snet-appgw'
@@ -348,7 +356,7 @@ resource appGwIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01
 }
 
 // Application Gateway
-resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' = {
+resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' = {
   name: appGwName
   location: location
   identity: {
@@ -394,6 +402,35 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
         name: 'port-80'
         properties: {
           port: 80
+        }
+      }
+    ]
+    // Use a modern predefined TLS policy (required for mTLS Passthrough with API 2025-03-01)
+    sslPolicy: {
+      policyType: 'Predefined'
+      policyName: 'AppGwSslPolicy20220101'
+    }
+    // Frontend SSL certificate for the HTTPS listener (terminates TLS from incoming clients)
+    sslCertificates: [
+      {
+        name: 'appgw-ssl-cert'
+        properties: {
+          data: appGwSslCertData
+          password: appGwSslCertPassword
+        }
+      }
+    ]
+    // mTLS Passthrough SSL profile: gateway requests a client cert but does NOT validate it.
+    // Certificate validation and policy enforcement are delegated to the backend servers.
+    sslProfiles: [
+      {
+        name: 'mtls-passthrough-profile'
+        properties: {
+          clientAuthConfiguration: {
+            verifyClientCertIssuerDN: false
+            verifyClientRevocation: 'None'
+            verifyClientAuthMode: 'Passthrough'
+          }
         }
       }
     ]
@@ -453,6 +490,25 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
           protocol: 'Http'
         }
       }
+      // HTTPS listener with mTLS Passthrough SSL profile
+      {
+        name: 'https-listener'
+        properties: {
+          frontendIPConfiguration: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendIPConfigurations', appGwName, 'appGwFrontendIp')
+          }
+          frontendPort: {
+            id: resourceId('Microsoft.Network/applicationGateways/frontendPorts', appGwName, 'port-443')
+          }
+          protocol: 'Https'
+          sslCertificate: {
+            id: resourceId('Microsoft.Network/applicationGateways/sslCertificates', appGwName, 'appgw-ssl-cert')
+          }
+          sslProfile: {
+            id: resourceId('Microsoft.Network/applicationGateways/sslProfiles', appGwName, 'mtls-passthrough-profile')
+          }
+        }
+      }
     ]
     requestRoutingRules: [
       {
@@ -462,6 +518,23 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2023-05-01' =
           priority: 100
           httpListener: {
             id: resourceId('Microsoft.Network/applicationGateways/httpListeners', appGwName, 'http-listener')
+          }
+          backendAddressPool: {
+            id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', appGwName, 'backend-pool')
+          }
+          backendHttpSettings: {
+            id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', appGwName, 'https-settings')
+          }
+        }
+      }
+      // HTTPS routing rule (priority 90 = evaluated before HTTP rule)
+      {
+        name: 'routing-rule-https'
+        properties: {
+          ruleType: 'Basic'
+          priority: 90
+          httpListener: {
+            id: resourceId('Microsoft.Network/applicationGateways/httpListeners', appGwName, 'https-listener')
           }
           backendAddressPool: {
             id: resourceId('Microsoft.Network/applicationGateways/backendAddressPools', appGwName, 'backend-pool')
