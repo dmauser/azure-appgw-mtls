@@ -77,8 +77,44 @@ echo -e "  Subscription: ${BLUE}${SUBSCRIPTION_NAME}${NC}"
 echo -e "  ID: ${BLUE}${SUBSCRIPTION_ID}${NC}"
 echo ""
 
+# Check VM SKU availability in the target region
+echo -e "${YELLOW}[STEP 3/11] Checking VM SKU availability in '${LOCATION}'...${NC}"
+
+# Required SKU: description
+declare -A REQUIRED_SKUS=(
+    ["Standard_B2s"]="Backend VMs (Linux)"
+    ["Standard_B2ms"]="Windows Jumpbox"
+)
+
+SKU_CHECK_FAILED=0
+for SKU in "${!REQUIRED_SKUS[@]}"; do
+    DESCRIPTION="${REQUIRED_SKUS[$SKU]}"
+    AVAILABLE=$(az vm list-skus \
+        --location "$LOCATION" \
+        --size "$SKU" \
+        --all \
+        --query "[?restrictions[?reasonCode=='NotAvailableForSubscription'] == []].name" \
+        -o tsv 2>/dev/null | grep -c "^${SKU}$" || true)
+    if [[ "$AVAILABLE" -gt 0 ]]; then
+        echo -e "  ${GREEN}✓${NC} ${SKU} (${DESCRIPTION}) — available"
+    else
+        echo -e "  ${RED}✗${NC} ${SKU} (${DESCRIPTION}) — NOT available in '${LOCATION}'"
+        SKU_CHECK_FAILED=1
+    fi
+done
+
+if [[ "$SKU_CHECK_FAILED" -eq 1 ]]; then
+    echo ""
+    echo -e "${RED}One or more required VM sizes are not available in '${LOCATION}'.${NC}"
+    echo -e "${YELLOW}Tip: Try a different region. Common alternatives: eastus2, westus2, westeurope, northeurope${NC}"
+    echo -e "${YELLOW}You can check availability with:${NC}"
+    echo -e "  az vm list-skus --location <region> --size Standard_B2 --all --output table"
+    exit 1
+fi
+echo -e "${GREEN}✓ All required VM sizes are available in '${LOCATION}'${NC}"
+
 # Generate a lab-specific SSH key pair stored in certs/
-echo -e "${YELLOW}[STEP 3/9] Generating SSH key pair for lab VMs...${NC}"
+echo -e "${YELLOW}[STEP 4/11] Generating SSH key pair for lab VMs...${NC}"
 mkdir -p certs
 SSH_PRIVATE_KEY_PATH="certs/vm-ssh-key"
 SSH_PUBLIC_KEY_PATH="certs/vm-ssh-key.pub"
@@ -93,7 +129,7 @@ echo -e "  Private key: ${BLUE}${SSH_PRIVATE_KEY_PATH}${NC} (will be uploaded to
 echo -e "  Public key:  ${BLUE}${SSH_PUBLIC_KEY_PATH}${NC}"
 
 # Generate certificates
-echo -e "${YELLOW}[STEP 4/9] Generating certificates...${NC}"
+echo -e "${YELLOW}[STEP 5/11] Generating certificates...${NC}"
 if [ ! -f "certs/ca.crt" ]; then
     ./generateCerts.sh
 else
@@ -103,7 +139,7 @@ fi
 echo -e "${GREEN}✓ Certificates ready${NC}"
 
 # Create resource group
-echo -e "${YELLOW}[STEP 5/9] Creating resource group...${NC}"
+echo -e "${YELLOW}[STEP 6/11] Creating resource group...${NC}"
 az group create \
   --name $RESOURCE_GROUP \
   --location $LOCATION \
@@ -112,7 +148,7 @@ az group create \
 echo -e "${GREEN}✓ Resource group created${NC}"
 
 # Deploy Bicep template
-echo -e "${YELLOW}[STEP 6/10] Deploying Azure resources (this may take 10-15 minutes)...${NC}"
+echo -e "${YELLOW}[STEP 7/11] Deploying Azure resources (this may take 10-15 minutes)...${NC}"
 
 # Generate Windows jumpbox admin password (meets complexity: upper, lower, digit, special)
 RAND_HEX=$(openssl rand -hex 6)
@@ -130,7 +166,7 @@ DEPLOYMENT_OUTPUT=$(az deployment group create \
 echo -e "${GREEN}✓ Azure resources deployed${NC}"
 
 # Extract outputs
-echo -e "${YELLOW}[STEP 7/10] Extracting deployment information...${NC}"
+echo -e "${YELLOW}[STEP 8/11] Extracting deployment information...${NC}"
 KEY_VAULT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.keyVaultName.value')
 APP_GW_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.appGwName.value')
 APP_GW_FQDN=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.appGwFqdn.value')
@@ -147,7 +183,7 @@ echo -e "${GREEN}✓ Deployment information extracted${NC}"
 USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv)
 
 # Assign Key Vault permissions to current user
-echo -e "${YELLOW}[STEP 8/10] Configuring Key Vault permissions...${NC}"
+echo -e "${YELLOW}[STEP 9/11] Configuring Key Vault permissions...${NC}"
 az role assignment create \
   --role "Key Vault Administrator" \
   --assignee $USER_OBJECT_ID \
@@ -238,7 +274,7 @@ echo -e "${GREEN}✓ Jumpbox admin password stored in Key Vault${NC}"
 echo -e "  Secret: ${BLUE}jumpbox-admin-password${NC}"
 
 # Deploy certificates to VMs using Azure CLI
-echo -e "${YELLOW}[STEP 9/10] Deploying certificates to backend VMs...${NC}"
+echo -e "${YELLOW}[STEP 10/11] Deploying certificates to backend VMs...${NC}"
 
 # Function to deploy certificates to a VM
 deploy_certs_to_vm() {
@@ -303,7 +339,7 @@ echo -e "${GREEN}✓ Certificates deployed to all VMs${NC}"
 echo -e "${GREEN}✓ App Gateway HTTPS listener with mTLS Passthrough configured via Bicep${NC}"
 
 # Install client certificates on Windows jumpbox
-echo -e "${YELLOW}[STEP 10/10] Installing client certificates on Windows jumpbox ($JUMPBOX_NAME)...${NC}"
+echo -e "${YELLOW}[STEP 11/11] Installing client certificates on Windows jumpbox ($JUMPBOX_NAME)...${NC}"
 
 # Create client cert PFX for Windows if not already present
 if [ ! -f "certs/appgw-client.pfx" ]; then

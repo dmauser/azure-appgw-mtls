@@ -128,7 +128,7 @@ Before deploying this lab, ensure you have:
   - Permission to create resources
   - Sufficient quota for:
     - 2x Standard_B2s VMs (Linux backends)
-    - 1x Standard_B2s VM (Windows Jumpbox)
+    - 1x Standard_B2ms VM (Windows Jumpbox)
     - 1x Application Gateway v2
     - 1x Azure Bastion (Basic tier)
     - 1x Key Vault
@@ -408,7 +408,7 @@ This lab deploys several Azure resources that incur costs while running. The est
 | Azure Bastion | Basic | ~$0.19 | ~$4.56 |
 | VM - Host1 | Standard_B2s | ~$0.042 | ~$1.01 |
 | VM - Host2 | Standard_B2s | ~$0.042 | ~$1.01 |
-| VM - Jumpbox (Windows) | Standard_B2s | ~$0.052 | ~$1.25 |
+| VM - Jumpbox (Windows) | Standard_B2ms | ~$0.083 | ~$1.99 |
 | Azure Key Vault | Standard | ~$0.00 | ~$0.03 |
 | Public IPs (x2) | Standard | ~$0.008 | ~$0.19 |
 | Managed Disks (x3) | Standard SSD (32 GB) | ~$0.004 | ~$0.15 |
