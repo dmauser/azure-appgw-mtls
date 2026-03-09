@@ -112,20 +112,25 @@ az group create \
 echo -e "${GREEN}✓ Resource group created${NC}"
 
 # Deploy Bicep template
-echo -e "${YELLOW}[STEP 6/9] Deploying Azure resources (this may take 10-15 minutes)...${NC}"
+echo -e "${YELLOW}[STEP 6/10] Deploying Azure resources (this may take 10-15 minutes)...${NC}"
+
+# Generate Windows jumpbox admin password (meets complexity: upper, lower, digit, special)
+RAND_HEX=$(openssl rand -hex 6)
+JUMPBOX_ADMIN_PASSWORD="JumpBox${RAND_HEX}!Az"
+
 CA_CERT_DATA=$(base64 -w 0 certs/ca.crt)
 APP_GW_SSL_CERT_DATA=$(base64 -w 0 certs/appgw-ssl.pfx)
 DEPLOYMENT_OUTPUT=$(az deployment group create \
   --name $DEPLOYMENT_NAME \
   --resource-group $RESOURCE_GROUP \
   --template-file main.bicep \
-  --parameters sshPublicKey="$SSH_PUBLIC_KEY" caCertData="$CA_CERT_DATA" appGwSslCertData="$APP_GW_SSL_CERT_DATA" appGwSslCertPassword="" \
+  --parameters sshPublicKey="$SSH_PUBLIC_KEY" caCertData="$CA_CERT_DATA" appGwSslCertData="$APP_GW_SSL_CERT_DATA" appGwSslCertPassword="" jumpboxAdminPassword="$JUMPBOX_ADMIN_PASSWORD" \
   --output json)
 
 echo -e "${GREEN}✓ Azure resources deployed${NC}"
 
 # Extract outputs
-echo -e "${YELLOW}[STEP 7/9] Extracting deployment information...${NC}"
+echo -e "${YELLOW}[STEP 7/10] Extracting deployment information...${NC}"
 KEY_VAULT_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.keyVaultName.value')
 APP_GW_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.appGwName.value')
 APP_GW_FQDN=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.appGwFqdn.value')
@@ -133,6 +138,8 @@ HOST1_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.host1Name.valu
 HOST2_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.host2Name.value')
 HOST1_IP=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.host1PrivateIp.value')
 HOST2_IP=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.host2PrivateIp.value')
+JUMPBOX_NAME=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.jumpboxName.value')
+JUMPBOX_IP=$(echo $DEPLOYMENT_OUTPUT | jq -r '.properties.outputs.jumpboxPrivateIp.value')
 
 echo -e "${GREEN}✓ Deployment information extracted${NC}"
 
@@ -140,7 +147,7 @@ echo -e "${GREEN}✓ Deployment information extracted${NC}"
 USER_OBJECT_ID=$(az ad signed-in-user show --query id -o tsv)
 
 # Assign Key Vault permissions to current user
-echo -e "${YELLOW}[STEP 8/9] Configuring Key Vault permissions...${NC}"
+echo -e "${YELLOW}[STEP 8/10] Configuring Key Vault permissions...${NC}"
 az role assignment create \
   --role "Key Vault Administrator" \
   --assignee $USER_OBJECT_ID \
@@ -221,8 +228,17 @@ echo -e "${GREEN}✓ SSH credentials stored in Key Vault${NC}"
 echo -e "  Secret: ${BLUE}vm-admin-username${NC}"
 echo -e "  Secret: ${BLUE}vm-ssh-private-key${NC}"
 
+# Store Windows jumpbox admin password in Key Vault
+az keyvault secret set \
+  --vault-name $KEY_VAULT_NAME \
+  --name "jumpbox-admin-password" \
+  --value "$JUMPBOX_ADMIN_PASSWORD" \
+  --output none
+echo -e "${GREEN}✓ Jumpbox admin password stored in Key Vault${NC}"
+echo -e "  Secret: ${BLUE}jumpbox-admin-password${NC}"
+
 # Deploy certificates to VMs using Azure CLI
-echo -e "${YELLOW}[STEP 9/9] Deploying certificates to backend VMs...${NC}"
+echo -e "${YELLOW}[STEP 9/10] Deploying certificates to backend VMs...${NC}"
 
 # Function to deploy certificates to a VM
 deploy_certs_to_vm() {
@@ -286,6 +302,63 @@ echo -e "${GREEN}✓ Certificates deployed to all VMs${NC}"
 # to the HTTPS listener on port 443. No additional CLI steps are required.
 echo -e "${GREEN}✓ App Gateway HTTPS listener with mTLS Passthrough configured via Bicep${NC}"
 
+# Install client certificates on Windows jumpbox
+echo -e "${YELLOW}[STEP 10/10] Installing client certificates on Windows jumpbox ($JUMPBOX_NAME)...${NC}"
+
+# Create client cert PFX for Windows if not already present
+if [ ! -f "certs/appgw-client.pfx" ]; then
+    echo -e "${BLUE}Creating client certificate PFX for Windows...${NC}"
+    pushd certs > /dev/null
+    openssl pkcs12 -export -out appgw-client.pfx \
+      -inkey appgw-client.key \
+      -in appgw-client.crt \
+      -certfile ca.crt \
+      -passout pass:
+    popd > /dev/null
+fi
+
+CLIENT_CERT_PFX=$(base64 -w 0 certs/appgw-client.pfx)
+CA_CERT_B64=$(base64 -w 0 certs/ca.crt)
+CLIENT_CERT_CRT=$(base64 -w 0 certs/appgw-client.crt)
+CLIENT_CERT_KEY=$(base64 -w 0 certs/appgw-client.key)
+
+cat > /tmp/install-jumpbox-certs.ps1 << 'PWSH'
+New-Item -ItemType Directory -Force -Path "C:\certs" | Out-Null
+$pfxBytes = [Convert]::FromBase64String("PLACEHOLDER_PFX")
+[IO.File]::WriteAllBytes("C:\certs\appgw-client.pfx", $pfxBytes)
+$caBytes = [Convert]::FromBase64String("PLACEHOLDER_CA")
+[IO.File]::WriteAllBytes("C:\certs\ca.crt", $caBytes)
+$crtBytes = [Convert]::FromBase64String("PLACEHOLDER_CRT")
+[IO.File]::WriteAllBytes("C:\certs\appgw-client.crt", $crtBytes)
+$keyBytes = [Convert]::FromBase64String("PLACEHOLDER_KEY")
+[IO.File]::WriteAllBytes("C:\certs\appgw-client.key", $keyBytes)
+$pfxPass = ConvertTo-SecureString -String "" -AsPlainText -Force
+Import-PfxCertificate -FilePath "C:\certs\appgw-client.pfx" -CertStoreLocation "Cert:\LocalMachine\My" -Password $pfxPass | Out-Null
+Import-Certificate -FilePath "C:\certs\ca.crt" -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
+Write-Host "Certificates installed successfully."
+Write-Host "  Client cert PFX : C:\certs\appgw-client.pfx  (also in Cert:\LocalMachine\My)"
+Write-Host "  CA cert          : C:\certs\ca.crt             (also in Cert:\LocalMachine\Root)"
+Write-Host "  Client cert PEM  : C:\certs\appgw-client.crt"
+Write-Host "  Client key PEM   : C:\certs\appgw-client.key"
+PWSH
+
+sed -i "s|PLACEHOLDER_PFX|$CLIENT_CERT_PFX|" /tmp/install-jumpbox-certs.ps1
+sed -i "s|PLACEHOLDER_CA|$CA_CERT_B64|" /tmp/install-jumpbox-certs.ps1
+sed -i "s|PLACEHOLDER_CRT|$CLIENT_CERT_CRT|" /tmp/install-jumpbox-certs.ps1
+sed -i "s|PLACEHOLDER_KEY|$CLIENT_CERT_KEY|" /tmp/install-jumpbox-certs.ps1
+
+az vm run-command invoke \
+  --resource-group $RESOURCE_GROUP \
+  --name $JUMPBOX_NAME \
+  --command-id RunPowerShellScript \
+  --scripts "$(cat /tmp/install-jumpbox-certs.ps1)" \
+  --output none
+
+echo -e "${GREEN}✓ Client certificates installed on Windows jumpbox${NC}"
+echo -e "  Cert files     : ${BLUE}C:\\certs\\${NC}"
+echo -e "  Client cert    : ${BLUE}Cert:\\LocalMachine\\My${NC}"
+echo -e "  CA cert        : ${BLUE}Cert:\\LocalMachine\\Root${NC}"
+
 # Display completion message
 echo ""
 echo -e "${GREEN}========================================${NC}"
@@ -301,6 +374,7 @@ echo ""
 echo -e "${BLUE}Backend Servers:${NC}"
 echo -e "  🔴 Host1 (Red):  $HOST1_NAME ($HOST1_IP)"
 echo -e "  🔵 Host2 (Blue): $HOST2_NAME ($HOST2_IP)"
+echo -e "  🖥️  Jumpbox:      $JUMPBOX_NAME ($JUMPBOX_IP)"
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
 echo "1. Wait a few minutes for all services to fully start"
@@ -309,6 +383,14 @@ echo -e "   ${GREEN}curl -k https://$APP_GW_FQDN${NC}"
 echo ""
 echo "3. Test with the client certificate (full mTLS):"
 echo -e "   ${GREEN}curl --cert certs/appgw-client.crt --key certs/appgw-client.key --cacert certs/ca.crt https://$APP_GW_FQDN${NC}"
+echo ""
+echo -e "${YELLOW}Accessing Windows Jumpbox via Azure Bastion (RDP):${NC}"
+echo "  Retrieve jumpbox admin password:"
+echo -e "   ${GREEN}az keyvault secret show --vault-name $KEY_VAULT_NAME --name jumpbox-admin-password --query value -o tsv${NC}"
+echo "  Username: jumpboxadmin"
+echo "  Client certs pre-installed in C:\\certs\\ and Windows certificate store"
+echo "  Test mTLS from jumpbox with curl:"
+echo -e "   ${GREEN}curl --cert C:\\certs\\appgw-client.crt --key C:\\certs\\appgw-client.key --cacert C:\\certs\\ca.crt https://<backend-private-ip>${NC}"
 echo ""
 echo -e "${YELLOW}Accessing VMs via Azure Bastion (SSH credentials from Key Vault):${NC}"
 echo "  Retrieve the SSH private key:"
@@ -332,6 +414,13 @@ cat > deployment-info.json << EOF
   "host2": {
     "name": "$HOST2_NAME",
     "privateIp": "$HOST2_IP"
+  },
+  "jumpbox": {
+    "name": "$JUMPBOX_NAME",
+    "privateIp": "$JUMPBOX_IP",
+    "adminUsername": "jumpboxadmin",
+    "kvSecretPassword": "jumpbox-admin-password",
+    "certsDirectory": "C:\\certs"
   },
   "sshCredentials": {
     "kvSecretUsername": "vm-admin-username",

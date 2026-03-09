@@ -71,6 +71,14 @@ This lab creates a fully automated Azure environment that demonstrates:
           └─────────────────────────┘
                       │
                       ▼
+    ┌──────────────────────────────────┐
+    │  Windows Jumpbox (snet-jumpbox)  │
+    │  - Client cert in cert store     │
+    │  - C:\certs\ (cert files)        │
+    │  - Access via Azure Bastion RDP  │
+    └──────────────────────────────────┘
+                      │
+                      ▼
               ┌───────────────┐
               │  Key Vault    │
               │ (Certificates)│
@@ -84,7 +92,8 @@ This lab creates a fully automated Azure environment that demonstrates:
 - 🤖 **Fully Automated**: Single command deployment using bash scripts
 - 🔑 **Certificate Management**: Automated generation and distribution of certificates
 - 🏰 **Secure Architecture**: Azure Bastion for VM access, NSG rules, private subnets
-- 📊 **Production Ready**: Follows Azure best practices for networking and security
+- �️ **Windows Jumpbox**: Dedicated Windows VM with client certificate pre-installed for mTLS testing directly against backends
+- �📊 **Production Ready**: Follows Azure best practices for networking and security
 - 🔄 **Idempotent Deployment**: Safe to re-run deployment scripts
 - 📝 **Infrastructure as Code**: Complete Bicep templates for reproducibility
 
@@ -118,7 +127,8 @@ Before deploying this lab, ensure you have:
 - **Active Azure Subscription** with:
   - Permission to create resources
   - Sufficient quota for:
-    - 2x Standard_B2s VMs
+    - 2x Standard_B2s VMs (Linux backends)
+    - 1x Standard_B2s VM (Windows Jumpbox)
     - 1x Application Gateway v2
     - 1x Azure Bastion (Basic tier)
     - 1x Key Vault
@@ -289,6 +299,7 @@ azure-appgw-mtls/
     ├── host2.key              # Host2 private key
     ├── appgw-client.crt       # App Gateway client certificate
     ├── appgw-client.key       # App Gateway client key
+    ├── appgw-client.pfx       # Client cert PFX (for Windows cert store)
     ├── appgw-ssl.pfx          # PFX bundle for App Gateway
     ├── vm-ssh-key             # Lab VM SSH private key (stored in Key Vault)
     └── vm-ssh-key.pub         # Lab VM SSH public key
@@ -300,8 +311,9 @@ azure-appgw-mtls/
 
 ```
 Root CA (self-signed)
-├── Host1 Server Certificate (server auth)
-├── Host2 Server Certificate (server auth)
+├── Host1 Server Certificate (server auth, *.contoso.com)
+├── Host2 Server Certificate (server auth, *.contoso.com)
+├── Application Gateway Frontend Certificate (server auth, *.contoso.com)
 └── Application Gateway Client Certificate (client auth)
 ```
 
@@ -315,11 +327,12 @@ Root CA (self-signed)
 
 | File | Purpose | Location |
 |------|---------|----------|
-| `ca.crt` | Root CA certificate | Key Vault + Backend VMs |
-| `host1.crt/key` | Host1 server certificate | Host1 VM `/etc/nginx/ssl/` |
-| `host2.crt/key` | Host2 server certificate | Host2 VM `/etc/nginx/ssl/` |
-| `appgw-client.crt/key` | Client authentication | Application Gateway |
-| `appgw-ssl.pfx` | PFX bundle | Key Vault |
+| `ca.crt` | Root CA certificate | Key Vault + Backend VMs + Jumpbox (`C:\certs`) |
+| `host1.crt/key` | Host1 server certificate (\*.contoso.com) | Host1 VM `/etc/nginx/ssl/` |
+| `host2.crt/key` | Host2 server certificate (\*.contoso.com) | Host2 VM `/etc/nginx/ssl/` |
+| `appgw-client.crt/key` | Client authentication (PEM) | Application Gateway + Jumpbox (`C:\certs`) |
+| `appgw-client.pfx` | Client cert PFX (no password) | Jumpbox Windows cert store (`Cert:\LocalMachine\My`) |
+| `appgw-ssl.pfx` | Frontend HTTPS listener cert (\*.contoso.com) | Key Vault |
 
 ## 🛠️ Troubleshooting
 
@@ -395,10 +408,11 @@ This lab deploys several Azure resources that incur costs while running. The est
 | Azure Bastion | Basic | ~$0.19 | ~$4.56 |
 | VM - Host1 | Standard_B2s | ~$0.042 | ~$1.01 |
 | VM - Host2 | Standard_B2s | ~$0.042 | ~$1.01 |
+| VM - Jumpbox (Windows) | Standard_B2s | ~$0.052 | ~$1.25 |
 | Azure Key Vault | Standard | ~$0.00 | ~$0.03 |
 | Public IPs (x2) | Standard | ~$0.008 | ~$0.19 |
-| Managed Disks (x2) | Standard SSD (32 GB) | ~$0.004 | ~$0.10 |
-| **Total (approx.)** | | **~$0.53** | **~$12.80** |
+| Managed Disks (x3) | Standard SSD (32 GB) | ~$0.004 | ~$0.15 |
+| **Total (approx.)** | | **~$0.58** | **~$14.10** |
 
 > **Note**: Application Gateway v2 has a fixed hourly charge plus a per-capacity-unit charge. The estimate above assumes minimal traffic (1 capacity unit). Under load, the Application Gateway cost can increase significantly.
 

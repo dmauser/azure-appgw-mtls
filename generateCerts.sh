@@ -153,6 +153,15 @@ echo -e "${YELLOW}[6/6] Creating combined PEM file for client certificate...${NC
 # Create a combined PEM file for the client certificate (for AppGW authentication)
 cat appgw-client.crt appgw-client.key > appgw-client-full.pem
 
+# Create PFX bundle for Windows certificate store installation
+openssl pkcs12 -export -out appgw-client.pfx \
+  -inkey appgw-client.key \
+  -in appgw-client.crt \
+  -certfile ca.crt \
+  -passout pass:
+
+echo -e "${GREEN}✓ Client certificate PFX bundle created (no password)${NC}"
+
 echo ""
 echo -e "${GREEN}========================================${NC}"
 echo -e "${GREEN}  Certificate Generation Complete!${NC}"
@@ -177,6 +186,7 @@ echo "     - appgw-server.key (Frontend HTTPS server private key)"
 echo "     - appgw-ssl.pfx (PFX bundle from server cert - used by App GW listener)"
 echo "     - appgw-client.crt (Client cert for mTLS testing - clientAuth)"
 echo "     - appgw-client.key (Client private key for mTLS testing)"
+echo "     - appgw-client.pfx (Client cert PFX - for Windows certificate store)"
 echo "     - appgw-client-full.pem (Combined PEM)"
 echo ""
 

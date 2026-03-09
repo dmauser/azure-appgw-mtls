@@ -37,19 +37,32 @@ param appGwSslCertData string
 @secure()
 param appGwSslCertPassword string = ''
 
+@description('Windows jumpbox VM administrator username')
+param jumpboxAdminUsername string = 'jumpboxadmin'
+
+@description('Windows jumpbox VM administrator password')
+@secure()
+param jumpboxAdminPassword string
+
+@description('Jumpbox subnet prefix')
+param jumpboxSubnetPrefix string = '10.0.4.0/24'
+
 // Variables
 var vnetName = 'vnet-mtls-${uniqueSuffix}'
 var appGwSubnetName = 'snet-appgw'
 var backendSubnetName = 'snet-backend'
 var bastionSubnetName = 'AzureBastionSubnet'
+var jumpboxSubnetName = 'snet-jumpbox'
 var appGwName = 'appgw-mtls-${uniqueSuffix}'
 var appGwPublicIpName = 'pip-appgw-${uniqueSuffix}'
 var bastionName = 'bastion-mtls-${uniqueSuffix}'
 var bastionPublicIpName = 'pip-bastion-${uniqueSuffix}'
 var nsgBackendName = 'nsg-backend-${uniqueSuffix}'
+var nsgJumpboxName = 'nsg-jumpbox-${uniqueSuffix}'
 var keyVaultName = 'kv-mtls-${uniqueSuffix}'
 var host1Name = 'vm-host1-${uniqueSuffix}'
 var host2Name = 'vm-host2-${uniqueSuffix}'
+var jumpboxName = 'vm-jumpbox-${uniqueSuffix}'
 var appGwIdentityName = 'id-appgw-${uniqueSuffix}'
 
 // Virtual Network
@@ -86,6 +99,15 @@ resource vnet 'Microsoft.Network/virtualNetworks@2023-05-01' = {
           addressPrefix: bastionSubnetPrefix
         }
       }
+      {
+        name: jumpboxSubnetName
+        properties: {
+          addressPrefix: jumpboxSubnetPrefix
+          networkSecurityGroup: {
+            id: nsgJumpbox.id
+          }
+        }
+      }
     ]
   }
 }
@@ -120,6 +142,55 @@ resource nsgBackend 'Microsoft.Network/networkSecurityGroups@2023-05-01' = {
           sourcePortRange: '*'
           destinationAddressPrefix: '*'
           destinationPortRange: '22'
+        }
+      }
+      {
+        name: 'Allow-HTTPS-Jumpbox'
+        properties: {
+          priority: 120
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: jumpboxSubnetPrefix
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '443'
+        }
+      }
+      {
+        name: 'Deny-All-Inbound'
+        properties: {
+          priority: 4096
+          direction: 'Inbound'
+          access: 'Deny'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ]
+  }
+}
+
+// Network Security Group for Jumpbox
+resource nsgJumpbox 'Microsoft.Network/networkSecurityGroups@2023-05-01' = {
+  name: nsgJumpboxName
+  location: location
+  properties: {
+    securityRules: [
+      {
+        name: 'Allow-RDP-Bastion'
+        properties: {
+          priority: 100
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: bastionSubnetPrefix
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '3389'
         }
       }
       {
@@ -247,6 +318,25 @@ resource nic2 'Microsoft.Network/networkInterfaces@2023-05-01' = {
   }
 }
 
+// Network Interface for Jumpbox
+resource nicJumpbox 'Microsoft.Network/networkInterfaces@2023-05-01' = {
+  name: 'nic-${jumpboxName}'
+  location: location
+  properties: {
+    ipConfigurations: [
+      {
+        name: 'ipconfig1'
+        properties: {
+          subnet: {
+            id: '${vnet.id}/subnets/${jumpboxSubnetName}'
+          }
+          privateIPAllocationMethod: 'Dynamic'
+        }
+      }
+    ]
+  }
+}
+
 // Cloud-init configuration for Host1 (Red)
 var cloudInitHost1 = base64(loadTextContent('cloud-init-host1.yaml'))
 
@@ -343,6 +433,43 @@ resource vmHost2 'Microsoft.Compute/virtualMachines@2023-03-01' = {
       networkInterfaces: [
         {
           id: nic2.id
+        }
+      ]
+    }
+  }
+}
+
+// Virtual Machine - Jumpbox (Windows)
+resource vmJumpbox 'Microsoft.Compute/virtualMachines@2023-03-01' = {
+  name: jumpboxName
+  location: location
+  properties: {
+    hardwareProfile: {
+      vmSize: 'Standard_B2s'
+    }
+    storageProfile: {
+      imageReference: {
+        publisher: 'MicrosoftWindowsServer'
+        offer: 'WindowsServer'
+        sku: '2022-datacenter-azure-edition'
+        version: 'latest'
+      }
+      osDisk: {
+        createOption: 'FromImage'
+        managedDisk: {
+          storageAccountType: 'Premium_LRS'
+        }
+      }
+    }
+    osProfile: {
+      computerName: 'jumpbox'
+      adminUsername: jumpboxAdminUsername
+      adminPassword: jumpboxAdminPassword
+    }
+    networkProfile: {
+      networkInterfaces: [
+        {
+          id: nicJumpbox.id
         }
       ]
     }
@@ -555,7 +682,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
           timeout: 30
           unhealthyThreshold: 3
           pickHostNameFromBackendHttpSettings: false
-          host: 'backend.azure.local'
+          host: 'backend.contoso.com'
           match: {
             statusCodes: [
               '200-399'
@@ -598,3 +725,5 @@ output host1PrivateIp string = nic1.properties.ipConfigurations[0].properties.pr
 output host2PrivateIp string = nic2.properties.ipConfigurations[0].properties.privateIPAddress
 output bastionName string = bastion.name
 output appGwIdentityPrincipalId string = appGwIdentity.properties.principalId
+output jumpboxName string = vmJumpbox.name
+output jumpboxPrivateIp string = nicJumpbox.properties.ipConfigurations[0].properties.privateIPAddress
