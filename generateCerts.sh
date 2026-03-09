@@ -20,7 +20,7 @@ CERTS_DIR="certs"
 mkdir -p $CERTS_DIR
 cd $CERTS_DIR
 
-echo -e "${YELLOW}[1/5] Generating Root CA...${NC}"
+echo -e "${YELLOW}[1/6] Generating Root CA...${NC}"
 
 # Generate Root CA private key
 openssl genrsa -out ca.key 4096
@@ -56,10 +56,11 @@ subjectAltName = @alt_names
 extendedKeyUsage = serverAuth
 
 [alt_names]
-DNS.1 = backend.azure.local
-DNS.2 = ${CN}
-DNS.3 = ${HOST}
-DNS.4 = localhost
+DNS.1 = *.contoso.com
+DNS.2 = contoso.com
+DNS.3 = ${CN}
+DNS.4 = ${HOST}
+DNS.5 = localhost
 IP.1 = 127.0.0.1
 EOF
     
@@ -77,13 +78,13 @@ EOF
     echo -e "${GREEN}✓ Certificate for $HOST generated and verified${NC}"
 }
 
-echo -e "${YELLOW}[2/5] Generating Host1 (Red) Server Certificate...${NC}"
-generate_server_cert "host1" "host1.azure.local" "backend.azure.local"
+echo -e "${YELLOW}[2/6] Generating Host1 (Red) Server Certificate...${NC}"
+generate_server_cert "host1" "host1.contoso.com" "*.contoso.com"
 
-echo -e "${YELLOW}[3/5] Generating Host2 (Blue) Server Certificate...${NC}"
-generate_server_cert "host2" "host2.azure.local" "backend.azure.local"
+echo -e "${YELLOW}[3/6] Generating Host2 (Blue) Server Certificate...${NC}"
+generate_server_cert "host2" "host2.contoso.com" "*.contoso.com"
 
-echo -e "${YELLOW}[4/5] Generating Client Certificate for Application Gateway...${NC}"
+echo -e "${YELLOW}[4/6] Generating Client Certificate for Application Gateway (mTLS testing)...${NC}"
 
 # Generate client private key
 openssl genrsa -out appgw-client.key 2048
@@ -110,18 +111,45 @@ openssl verify -CAfile ca.crt appgw-client.crt
 
 echo -e "${GREEN}✓ Client certificate generated and verified${NC}"
 
-echo -e "${YELLOW}[5/5] Creating PFX bundle for Application Gateway...${NC}"
+echo -e "${YELLOW}[5/6] Creating PFX bundle for Application Gateway frontend listener...${NC}"
 
-# Create PFX file (PKCS#12) for Application Gateway SSL certificate
-# Note: Using empty password for simplicity - in production, use a secure password
+# Generate a dedicated server certificate for the App Gateway HTTPS listener.
+# This cert MUST have extendedKeyUsage=serverAuth so that curl/browsers accept it.
+# The appgw-client cert (clientAuth only) cannot be used as a server cert.
+openssl genrsa -out appgw-server.key 2048
+
+openssl req -new -key appgw-server.key -out appgw-server.csr \
+  -subj "/C=US/ST=Texas/L=Coppell/O=Azure mTLS Lab/OU=Application Gateway/CN=*.contoso.com"
+
+cat > appgw-server.ext << EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = *.contoso.com
+DNS.2 = contoso.com
+DNS.3 = localhost
+EOF
+
+openssl x509 -req -in appgw-server.csr -CA ca.crt -CAkey ca.key \
+  -CAcreateserial -out appgw-server.crt -days 825 -sha256 \
+  -extfile appgw-server.ext
+
+openssl verify -CAfile ca.crt appgw-server.crt
+
+# Build the PFX from the server cert (serverAuth) — NOT the client cert
 openssl pkcs12 -export -out appgw-ssl.pfx \
-  -inkey appgw-client.key \
-  -in appgw-client.crt \
+  -inkey appgw-server.key \
+  -in appgw-server.crt \
   -certfile ca.crt \
   -passout pass:
 
-echo -e "${GREEN}✓ PFX bundle created${NC}"
+echo -e "${GREEN}✓ App Gateway server certificate and PFX bundle created${NC}"
 
+echo -e "${YELLOW}[6/6] Creating combined PEM file for client certificate...${NC}"
 # Create a combined PEM file for the client certificate (for AppGW authentication)
 cat appgw-client.crt appgw-client.key > appgw-client-full.pem
 
@@ -144,9 +172,11 @@ echo "     - host2.crt (Server Certificate)"
 echo "     - host2.key (Server Private Key)"
 echo ""
 echo "  🌐 Application Gateway:"
-echo "     - appgw-client.crt (Client Certificate)"
-echo "     - appgw-client.key (Client Private Key)"
-echo "     - appgw-ssl.pfx (PFX Bundle)"
+echo "     - appgw-server.crt (Frontend HTTPS server cert - serverAuth)"
+echo "     - appgw-server.key (Frontend HTTPS server private key)"
+echo "     - appgw-ssl.pfx (PFX bundle from server cert - used by App GW listener)"
+echo "     - appgw-client.crt (Client cert for mTLS testing - clientAuth)"
+echo "     - appgw-client.key (Client private key for mTLS testing)"
 echo "     - appgw-client-full.pem (Combined PEM)"
 echo ""
 
