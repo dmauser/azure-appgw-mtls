@@ -29,11 +29,20 @@ write_files:
               add_header Content-Type text/plain;
           }
           
-          # All other traffic requires a valid client certificate (mTLS)
-          # App Gateway injects the client certificate PEM as X-Client-Cert via the
-          # 'client_certificate' mutual-authentication server variable rewrite rule.
+          # All other traffic requires a valid client certificate (mTLS).
+          # Dual-path check:
+          #  - Direct connection: nginx prompts & validates via TLS ($ssl_client_verify = SUCCESS)
+          #  - Via App Gateway:   AppGW injects the client cert PEM as X-Client-Cert header
+          #    (Passthrough mode + 'client_certificate' mutual-auth server variable rewrite rule)
           location / {
-              if ($http_x_client_cert = "") {
+              set $mtls_ok 0;
+              if ($ssl_client_verify = "SUCCESS") {
+                  set $mtls_ok 1;
+              }
+              if ($http_x_client_cert != "") {
+                  set $mtls_ok 1;
+              }
+              if ($mtls_ok = 0) {
                   return 403 'mTLS client certificate required';
               }
               try_files $uri $uri/ =404;

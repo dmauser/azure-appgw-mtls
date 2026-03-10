@@ -294,7 +294,18 @@ server {
         add_header Content-Type text/plain;
     }
     location / {
-        if ($http_x_client_cert = "") {
+        # Dual-path mTLS check:
+        #  - Direct connection: nginx prompts & validates via TLS ($ssl_client_verify = SUCCESS)
+        #  - Via App Gateway:   AppGW injects the client cert PEM as X-Client-Cert header
+        #    (Passthrough mode + 'client_certificate' mutual-auth server variable rewrite rule)
+        set $mtls_ok 0;
+        if ($ssl_client_verify = "SUCCESS") {
+            set $mtls_ok 1;
+        }
+        if ($http_x_client_cert != "") {
+            set $mtls_ok 1;
+        }
+        if ($mtls_ok = 0) {
             return 403 'mTLS client certificate required';
         }
         try_files $uri $uri/ =404;
