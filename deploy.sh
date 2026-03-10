@@ -120,11 +120,25 @@ JUMPBOX_ADMIN_PASSWORD="JumpBox${RAND_HEX}!Az"
 
 CA_CERT_DATA=$(base64 -w 0 certs/ca.crt)
 APP_GW_SSL_CERT_DATA=$(base64 -w 0 certs/appgw-ssl.pfx)
+HOST1_CERT_DATA=$(base64 -w 0 certs/host1.crt)
+HOST1_KEY_DATA=$(base64 -w 0 certs/host1.key)
+HOST2_CERT_DATA=$(base64 -w 0 certs/host2.crt)
+HOST2_KEY_DATA=$(base64 -w 0 certs/host2.key)
+
 DEPLOYMENT_OUTPUT=$(az deployment group create \
   --name $DEPLOYMENT_NAME \
   --resource-group $RESOURCE_GROUP \
   --template-file main.bicep \
-  --parameters sshPublicKey="$SSH_PUBLIC_KEY" caCertData="$CA_CERT_DATA" appGwSslCertData="$APP_GW_SSL_CERT_DATA" appGwSslCertPassword="" jumpboxAdminPassword="$JUMPBOX_ADMIN_PASSWORD" \
+  --parameters \
+    sshPublicKey="$SSH_PUBLIC_KEY" \
+    caCertData="$CA_CERT_DATA" \
+    appGwSslCertData="$APP_GW_SSL_CERT_DATA" \
+    appGwSslCertPassword="" \
+    jumpboxAdminPassword="$JUMPBOX_ADMIN_PASSWORD" \
+    host1CertData="$HOST1_CERT_DATA" \
+    host1KeyData="$HOST1_KEY_DATA" \
+    host2CertData="$HOST2_CERT_DATA" \
+    host2KeyData="$HOST2_KEY_DATA" \
   --output json)
 
 echo -e "${GREEN}✓ Azure resources deployed${NC}"
@@ -238,157 +252,20 @@ echo -e "${GREEN}✓ Jumpbox admin password stored in Key Vault${NC}"
 echo -e "  Secret: ${BLUE}jumpbox-admin-password${NC}"
 
 # Deploy certificates to VMs using Azure CLI
-echo -e "${YELLOW}[STEP 9/10] Deploying certificates to backend VMs...${NC}"
-
-# Function to deploy certificates to a VM
-deploy_certs_to_vm() {
-    local VM_NAME=$1
-    local CERT_NAME=$2
-    
-    echo -e "${BLUE}  Deploying certificates to $VM_NAME...${NC}"
-    
-    # Create deployment script
-    cat > /tmp/deploy-vm-certs.sh << 'EOFSCRIPT'
-#!/bin/bash
-# Download certificates from Key Vault and configure nginx
-
-VAULT_NAME="__VAULT_NAME__"
-HOST_NAME="__HOST_NAME__"
-
-# Install Azure CLI if not present
-if ! command -v az &> /dev/null; then
-    curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash
-fi
-
-# Login using VM managed identity (will be added in future enhancement)
-# For now, we'll use a different approach - uploading via custom script extension
-
-echo "Certificate deployment script executed on $HOST_NAME"
-EOFSCRIPT
-    
-    sed -i "s/__VAULT_NAME__/$KEY_VAULT_NAME/g" /tmp/deploy-vm-certs.sh
-    sed -i "s/__HOST_NAME__/$CERT_NAME/g" /tmp/deploy-vm-certs.sh
-    
-    # For this lab, we'll use run-command to deploy certificates
-    # Build a full chain: server cert + CA cert (required by App Gateway to validate the backend chain)
-    CA_CERT=$(cat certs/ca.crt | base64 -w 0)
-    CHAIN_CERT=$(cat certs/${CERT_NAME}.crt certs/ca.crt | base64 -w 0)
-    SERVER_KEY=$(cat certs/${CERT_NAME}.key | base64 -w 0)
-
-    # Generate nginx config with two HTTPS listeners:
-    #  - Port 443: App Gateway facing (ssl_verify_client off, header-based mTLS)
-    #  - Port 8443: Direct internal mTLS (ssl_verify_client on, real TLS handshake)
-    NGINX_CFG=$(cat << 'NGINXEOF'
-# Port 443 — Application Gateway facing listener
-# ssl_verify_client off; App Gateway handles client cert handshake.
-# Certificate metadata arrives as HTTP headers via AppGW rewrite rules.
-# Only the App Gateway subnet (10.0.1.0/24) is allowed to connect.
-server {
-    listen 443 ssl;
-    server_name _;
-    ssl_certificate /etc/nginx/ssl/server.crt;
-    ssl_certificate_key /etc/nginx/ssl/server.key;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_verify_client off;
-    allow 10.0.1.0/24;
-    deny all;
-    root /var/www/html;
-    index index.html;
-    location = /healthz {
-        return 200 'OK';
-        add_header Content-Type text/plain;
-    }
-    location = /whoami {
-        default_type application/json;
-        return 200
-        '{'
-        '"listener":"appgw-443",'
-        '"remote_addr":"$remote_addr",'
-        '"host":"$host",'
-        '"request_uri":"$request_uri",'
-        '"x_forwarded_for":"$http_x_forwarded_for",'
-        '"x_forwarded_proto":"$http_x_forwarded_proto",'
-        '"x_client_cert_verify":"$http_x_client_cert_verify",'
-        '"x_client_cert_subject":"$http_x_client_cert_subject",'
-        '"x_client_cert_issuer":"$http_x_client_cert_issuer",'
-        '"x_client_cert_fingerprint":"$http_x_client_cert_fingerprint",'
-        '"x_client_cert_present":"$http_x_client_cert"'
-        '}';
-    }
-    location / {
-        if ($http_x_client_cert = "") {
-            return 403 'mTLS client certificate required (via Application Gateway)';
-        }
-        try_files $uri $uri/ =404;
-    }
-}
-# Port 8443 — Direct internal mTLS listener
-# Real mutual TLS: nginx requests and validates the client certificate.
-server {
-    listen 8443 ssl;
-    server_name _;
-    ssl_certificate /etc/nginx/ssl/server.crt;
-    ssl_certificate_key /etc/nginx/ssl/server.key;
-    ssl_client_certificate /etc/nginx/ssl/ca.crt;
-    ssl_verify_client on;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    root /var/www/html;
-    index index.html;
-    location = /whoami {
-        default_type application/json;
-        return 200
-        '{'
-        '"listener":"direct-8443",'
-        '"remote_addr":"$remote_addr",'
-        '"host":"$host",'
-        '"ssl_client_verify":"$ssl_client_verify",'
-        '"ssl_client_s_dn":"$ssl_client_s_dn",'
-        '"ssl_client_i_dn":"$ssl_client_i_dn",'
-        '"ssl_client_fingerprint":"$ssl_client_fingerprint",'
-        '"ssl_client_serial":"$ssl_client_serial"'
-        '}';
-    }
-    location / {
-        try_files $uri $uri/ =404;
-    }
-}
-NGINXEOF
-)
-    NGINX_CFG_B64=$(echo "$NGINX_CFG" | base64 -w 0)
-
-    az vm run-command invoke \
-      --resource-group $RESOURCE_GROUP \
-      --name $VM_NAME \
-      --command-id RunShellScript \
-      --scripts \
-        "echo '$CA_CERT' | base64 -d | sudo tee /etc/nginx/ssl/ca.crt > /dev/null" \
-        "echo '$CHAIN_CERT' | base64 -d | sudo tee /etc/nginx/ssl/server.crt > /dev/null" \
-        "echo '$SERVER_KEY' | base64 -d | sudo tee /etc/nginx/ssl/server.key > /dev/null" \
-        "sudo chmod 600 /etc/nginx/ssl/server.key" \
-        "sudo chown www-data:www-data /etc/nginx/ssl/*" \
-        "echo '$NGINX_CFG_B64' | base64 -d | sudo tee /etc/nginx/sites-available/default > /dev/null" \
-        "sudo nginx -t && sudo systemctl restart nginx" \
-        "sudo systemctl status nginx --no-pager" \
-      --output none
-    
-    echo -e "${GREEN}  ✓ Certificates and nginx config deployed to $VM_NAME${NC}"
-}
-
-deploy_certs_to_vm "$HOST1_NAME" "host1"
-deploy_certs_to_vm "$HOST2_NAME" "host2"
-
-echo -e "${GREEN}✓ Certificates and nginx config deployed to all VMs${NC}"
+echo -e "${YELLOW}[STEP 9/10] VMs deployed with embedded certificates${NC}"
+echo -e "${GREEN}✓ Backend VMs are configured with real CA-signed certificates via cloud-init${NC}"
+echo -e "${GREEN}✓ No additional certificate deployment needed${NC}"
+echo ""
+echo -e "${BLUE}Note: Certificates are embedded in cloud-init during VM deployment.${NC}"
+echo -e "${BLUE}Backends will be healthy immediately after nginx starts (30-60 seconds).${NC}"
+echo ""
 
 # App Gateway mTLS is configured via Bicep (API 2025-03-01):
-# - Two SSL profiles: 'mtls-passthrough-profile' (Passthrough) and 'mtls-strict-profile' (Enabled)
-# - HTTPS listener currently uses Passthrough; switch to Strict by changing the sslProfile reference
-# - Rewrite rule set 'mtls-cert-forward' injects X-Client-Cert, X-Client-Cert-Verify,
-#   X-Client-Cert-Subject, X-Client-Cert-Issuer, X-Client-Cert-Fingerprint headers
+# - Two SSL profiles: 'mtls-passthrough-profile' (Passthrough) and 'mtls-strict-profile' (Strict)
+# - HTTPS listener uses Passthrough; can switch to Strict via sslProfile reference
+# - Rewrite rule set 'mtls-cert-forward' injects client cert headers to backend
 # - Backend nginx :443 validates via headers (ssl_verify_client off) — AppGW-only access
 # - Backend nginx :8443 does real mTLS (ssl_verify_client on) — direct internal access
-echo -e "${GREEN}✓ App Gateway mTLS + dual-listener nginx configured via Bicep${NC}"
 
 # Install client certificates on Windows jumpbox
 echo -e "${YELLOW}[STEP 10/10] Installing client certificates on Windows jumpbox ($JUMPBOX_NAME)...${NC}"

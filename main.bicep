@@ -37,6 +37,22 @@ param appGwSslCertData string
 @secure()
 param appGwSslCertPassword string = ''
 
+@description('Base64-encoded Host1 server certificate')
+@secure()
+param host1CertData string
+
+@description('Base64-encoded Host1 server private key')
+@secure()
+param host1KeyData string
+
+@description('Base64-encoded Host2 server certificate')
+@secure()
+param host2CertData string
+
+@description('Base64-encoded Host2 server private key')
+@secure()
+param host2KeyData string
+
 @description('Windows jumpbox VM administrator username')
 param jumpboxAdminUsername string = 'jumpboxadmin'
 
@@ -350,11 +366,11 @@ resource nicJumpbox 'Microsoft.Network/networkInterfaces@2023-05-01' = {
   }
 }
 
-// Cloud-init configuration for Host1 (Red)
-var cloudInitHost1 = base64(loadTextContent('cloud-init-host1.yaml'))
+// Cloud-init configuration for Host1 (Red) with embedded certificates
+var cloudInitHost1 = base64(replace(replace(replace(loadTextContent('cloud-init-host1.yaml'), '__CA_CERT_B64__', caCertData), '__SERVER_CERT_B64__', host1CertData), '__SERVER_KEY_B64__', host1KeyData))
 
-// Cloud-init configuration for Host2 (Blue)
-var cloudInitHost2 = base64(loadTextContent('cloud-init-host2.yaml'))
+// Cloud-init configuration for Host2 (Blue) with embedded certificates
+var cloudInitHost2 = base64(replace(replace(replace(loadTextContent('cloud-init-host2.yaml'), '__CA_CERT_B64__', caCertData), '__SERVER_CERT_B64__', host2CertData), '__SERVER_KEY_B64__', host2KeyData))
 
 // Virtual Machine - Host1 (Red)
 resource vmHost1 'Microsoft.Compute/virtualMachines@2023-03-01' = {

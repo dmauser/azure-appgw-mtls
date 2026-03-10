@@ -187,15 +187,15 @@ write_files:
       </html>
 
 runcmd:
-  - mkdir -p /etc/nginx/ssl
-  # Generate temporary self-signed certs so nginx can start the HTTPS block at boot.
-  # Step 9 of deploy.sh replaces these with the real CA-signed certs.
-  - openssl req -x509 -nodes -days 1 -newkey rsa:2048 -keyout /etc/nginx/ssl/server.key -out /etc/nginx/ssl/server.crt -subj '/CN=placeholder'
-  - cp /etc/nginx/ssl/server.crt /etc/nginx/ssl/ca.crt
-  - chmod 600 /etc/nginx/ssl/server.key
-  - chown -R www-data:www-data /etc/nginx/ssl
-  - chown -R www-data:www-data /var/www/html
-  - chmod 755 /var/www/html
-  - systemctl enable nginx
-  - systemctl start nginx
-  - echo "Host2 cloud-init complete" > /var/log/cloud-init-done.log
+    - mkdir -p /etc/nginx/ssl
+    # Deploy real CA-signed certificates embedded during deployment
+    - echo '__CA_CERT_B64__' | base64 -d > /etc/nginx/ssl/ca.crt
+    - echo '__SERVER_CERT_B64__' | base64 -d > /etc/nginx/ssl/server.crt
+    - echo '__SERVER_KEY_B64__' | base64 -d > /etc/nginx/ssl/server.key
+    - chmod 600 /etc/nginx/ssl/server.key
+    - chown -R www-data:www-data /etc/nginx/ssl
+    - chown -R www-data:www-data /var/www/html
+    - chmod 755 /var/www/html
+    - systemctl enable nginx
+    - systemctl start nginx
+    - echo "Host2 cloud-init complete with real certificates" > /var/log/cloud-init-done.log
