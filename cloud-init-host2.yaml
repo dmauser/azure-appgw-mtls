@@ -23,8 +23,8 @@ write_files:
           root /var/www/html;
           index index.html;
 
-          # Health probe endpoint - no client cert required
-          location /health {
+          # Health probe endpoint - exact match so it always bypasses the mTLS check in location /
+          location = /health {
               return 200 'OK';
               add_header Content-Type text/plain;
           }

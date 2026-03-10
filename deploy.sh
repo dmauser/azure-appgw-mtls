@@ -289,7 +289,7 @@ server {
     ssl_ciphers HIGH:!aNULL:!MD5;
     root /var/www/html;
     index index.html;
-    location /health {
+    location = /health {
         return 200 'OK';
         add_header Content-Type text/plain;
     }
