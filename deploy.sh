@@ -274,7 +274,36 @@ EOFSCRIPT
     CA_CERT=$(cat certs/ca.crt | base64 -w 0)
     CHAIN_CERT=$(cat certs/${CERT_NAME}.crt certs/ca.crt | base64 -w 0)
     SERVER_KEY=$(cat certs/${CERT_NAME}.key | base64 -w 0)
-    
+
+    # Generate nginx config that checks the X-Client-Cert header injected by App Gateway
+    # via the 'client_certificate' mutual-authentication server variable rewrite rule.
+    NGINX_CFG=$(cat << 'NGINXEOF'
+server {
+    listen 443 ssl;
+    server_name _;
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
+    ssl_client_certificate /etc/nginx/ssl/ca.crt;
+    ssl_verify_client optional;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    root /var/www/html;
+    index index.html;
+    location /health {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+    location / {
+        if ($http_x_client_cert = "") {
+            return 403 'mTLS client certificate required';
+        }
+        try_files $uri $uri/ =404;
+    }
+}
+NGINXEOF
+)
+    NGINX_CFG_B64=$(echo "$NGINX_CFG" | base64 -w 0)
+
     az vm run-command invoke \
       --resource-group $RESOURCE_GROUP \
       --name $VM_NAME \
@@ -285,22 +314,25 @@ EOFSCRIPT
         "echo '$SERVER_KEY' | base64 -d | sudo tee /etc/nginx/ssl/server.key > /dev/null" \
         "sudo chmod 600 /etc/nginx/ssl/server.key" \
         "sudo chown www-data:www-data /etc/nginx/ssl/*" \
-        "sudo systemctl restart nginx" \
+        "echo '$NGINX_CFG_B64' | base64 -d | sudo tee /etc/nginx/sites-available/default > /dev/null" \
+        "sudo nginx -t && sudo systemctl restart nginx" \
         "sudo systemctl status nginx --no-pager" \
       --output none
     
-    echo -e "${GREEN}  ✓ Certificates deployed to $VM_NAME${NC}"
+    echo -e "${GREEN}  ✓ Certificates and nginx config deployed to $VM_NAME${NC}"
 }
 
 deploy_certs_to_vm "$HOST1_NAME" "host1"
 deploy_certs_to_vm "$HOST2_NAME" "host2"
 
-echo -e "${GREEN}✓ Certificates deployed to all VMs${NC}"
+echo -e "${GREEN}✓ Certificates and nginx config deployed to all VMs${NC}"
 
-# mTLS Passthrough HTTPS listener is now fully configured via Bicep (API 2025-03-01)
-# ssl-profile 'mtls-passthrough-profile' with VerifyClientAuthMode=Passthrough is applied
-# to the HTTPS listener on port 443. No additional CLI steps are required.
-echo -e "${GREEN}✓ App Gateway HTTPS listener with mTLS Passthrough configured via Bicep${NC}"
+# App Gateway mTLS is configured via Bicep (API 2025-03-01):
+# - SSL profile 'mtls-passthrough-profile' with VerifyClientAuthMode=Passthrough on the HTTPS listener
+# - Rewrite rule set 'mtls-cert-forward' injects the client certificate PEM as the
+#   X-Client-Cert HTTP header using the 'client_certificate' mutual-authentication server variable.
+# - Nginx backends check for the X-Client-Cert header to enforce mTLS.
+echo -e "${GREEN}✓ App Gateway mTLS Passthrough + client certificate forwarding configured via Bicep${NC}"
 
 # Install client certificates on Windows jumpbox
 echo -e "${YELLOW}[STEP 10/10] Installing client certificates on Windows jumpbox ($JUMPBOX_NAME)...${NC}"

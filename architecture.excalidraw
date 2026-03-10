@@ -1196,9 +1196,9 @@
       "id": "arr_jumpbox_host1",
       "type": "arrow",
       "x": 622.111501057943,
-      "y": 752.0369912292324,
+      "y": 752.0499588773698,
       "width": 380.44483439127634,
-      "height": 182.4654480333993,
+      "height": 182.60283959770607,
       "angle": 0,
       "strokeColor": "#f08c00",
       "backgroundColor": "transparent",
@@ -1213,11 +1213,11 @@
         "type": 2
       },
       "seed": 2006,
-      "version": 480,
-      "versionNonce": 127338236,
+      "version": 481,
+      "versionNonce": 808395332,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1773094692603,
+      "updated": 1773095519842,
       "link": null,
       "locked": false,
       "points": [
@@ -1227,7 +1227,7 @@
         ],
         [
           -380.44483439127634,
-          -182.4654480333993
+          -182.60283959770607
         ]
       ],
       "lastCommittedPoint": null,
@@ -1250,8 +1250,8 @@
       "type": "arrow",
       "x": 632.1976680725561,
       "y": 610.6671244303386,
-      "width": 74.97517458297261,
-      "height": 47.367501846093546,
+      "width": 76.64184124963924,
+      "height": 47.36740012083317,
       "angle": 0,
       "strokeColor": "#f08c00",
       "backgroundColor": "transparent",
@@ -1266,11 +1266,11 @@
         "type": 2
       },
       "seed": 2007,
-      "version": 421,
-      "versionNonce": 488177660,
+      "version": 426,
+      "versionNonce": 1658122748,
       "isDeleted": false,
       "boundElements": [],
-      "updated": 1773094702522,
+      "updated": 1773094937359,
       "link": null,
       "locked": false,
       "points": [
@@ -1279,20 +1279,20 @@
           0
         ],
         [
-          -74.97517458297261,
-          -47.367501846093546
+          -76.64184124963924,
+          -47.36740012083317
         ]
       ],
       "lastCommittedPoint": null,
       "startBinding": {
         "elementId": "jumpbox_rect",
-        "focus": 0.17006891715006672,
+        "focus": 0.1822575411202514,
         "gap": 27.299942309931613
       },
       "endBinding": {
         "elementId": "host2_text",
-        "focus": 0.02315564587891243,
-        "gap": 22.222493489583485
+        "focus": 0.039745136642372045,
+        "gap": 20.555826822916856
       },
       "startArrowhead": null,
       "endArrowhead": "arrow",

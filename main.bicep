@@ -637,6 +637,30 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
         }
       }
     ]
+    // Rewrite rule set: inject the client certificate (PEM) as an HTTP header to the backend.
+    // App Gateway captures the certificate from the mTLS handshake via the
+    // 'client_certificate' mutual-authentication server variable (works with Passthrough mode).
+    rewriteRuleSets: [
+      {
+        name: 'mtls-cert-forward'
+        properties: {
+          rewriteRules: [
+            {
+              name: 'forward-client-cert'
+              ruleSequence: 100
+              actionSet: {
+                requestHeaderConfigurations: [
+                  {
+                    headerName: 'X-Client-Cert'
+                    headerValue: '{var_client_certificate}'
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ]
     requestRoutingRules: [
       {
         name: 'routing-rule-http'
@@ -655,6 +679,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
         }
       }
       // HTTPS routing rule (priority 90 = evaluated before HTTP rule)
+      // References the rewrite rule set that forwards the client certificate header
       {
         name: 'routing-rule-https'
         properties: {
@@ -668,6 +693,9 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
           }
           backendHttpSettings: {
             id: resourceId('Microsoft.Network/applicationGateways/backendHttpSettingsCollection', appGwName, 'https-settings')
+          }
+          rewriteRuleSet: {
+            id: resourceId('Microsoft.Network/applicationGateways/rewriteRuleSets', appGwName, 'mtls-cert-forward')
           }
         }
       }

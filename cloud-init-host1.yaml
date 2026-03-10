@@ -30,8 +30,10 @@ write_files:
           }
           
           # All other traffic requires a valid client certificate (mTLS)
+          # App Gateway injects the client certificate PEM as X-Client-Cert via the
+          # 'client_certificate' mutual-authentication server variable rewrite rule.
           location / {
-              if ($ssl_client_verify != SUCCESS) {
+              if ($http_x_client_cert = "") {
                   return 403 'mTLS client certificate required';
               }
               try_files $uri $uri/ =404;
