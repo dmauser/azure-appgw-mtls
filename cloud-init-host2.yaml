@@ -9,42 +9,106 @@ packages:
 write_files:
   - path: /etc/nginx/sites-available/default
     content: |
+      # ──────────────────────────────────────────────────────────────
+      # Port 443 — Application Gateway facing listener
+      # ──────────────────────────────────────────────────────────────
+      # ssl_verify_client is OFF; the App Gateway handles the client
+      # certificate handshake (Passthrough or Strict mode) and injects
+      # the certificate metadata as HTTP headers via rewrite rules.
+      # Only the App Gateway subnet (10.0.1.0/24) is allowed to connect.
+      # ──────────────────────────────────────────────────────────────
       server {
           listen 443 ssl;
           server_name _;
-          
+
           ssl_certificate /etc/nginx/ssl/server.crt;
           ssl_certificate_key /etc/nginx/ssl/server.key;
-          ssl_client_certificate /etc/nginx/ssl/ca.crt;
-          ssl_verify_client optional;
           ssl_protocols TLSv1.2 TLSv1.3;
           ssl_ciphers HIGH:!aNULL:!MD5;
-          
+
+          # Do NOT request a client certificate — App Gateway already did that
+          ssl_verify_client off;
+
+          # Restrict to App Gateway subnet
+          allow 10.0.1.0/24;
+          deny all;
+
           root /var/www/html;
           index index.html;
 
-          # Health probe endpoint - exact match so it always bypasses the mTLS check in location /
-          location = /health {
+          # Health probe endpoint for App Gateway (no auth required)
+          location = /healthz {
               return 200 'OK';
               add_header Content-Type text/plain;
           }
-          
-          # All other traffic requires a valid client certificate (mTLS).
-          # Dual-path check:
-          #  - Direct connection: nginx prompts & validates via TLS ($ssl_client_verify = SUCCESS)
-          #  - Via App Gateway:   AppGW injects the client cert PEM as X-Client-Cert header
-          #    (Passthrough mode + 'client_certificate' mutual-auth server variable rewrite rule)
+
+          # Diagnostic endpoint — returns App Gateway-injected certificate headers
+          location = /whoami {
+              default_type application/json;
+              return 200
+              '{'
+              '"listener":"appgw-443",'
+              '"remote_addr":"$remote_addr",'
+              '"host":"$host",'
+              '"request_uri":"$request_uri",'
+              '"x_forwarded_for":"$http_x_forwarded_for",'
+              '"x_forwarded_proto":"$http_x_forwarded_proto",'
+              '"x_client_cert_verify":"$http_x_client_cert_verify",'
+              '"x_client_cert_subject":"$http_x_client_cert_subject",'
+              '"x_client_cert_issuer":"$http_x_client_cert_issuer",'
+              '"x_client_cert_fingerprint":"$http_x_client_cert_fingerprint",'
+              '"x_client_cert_present":"$http_x_client_cert"'
+              '}';
+          }
+
+          # Enforce mTLS via App Gateway headers
           location / {
-              set $mtls_ok 0;
-              if ($ssl_client_verify = "SUCCESS") {
-                  set $mtls_ok 1;
+              if ($http_x_client_cert = "") {
+                  return 403 'mTLS client certificate required (via Application Gateway)';
               }
-              if ($http_x_client_cert != "") {
-                  set $mtls_ok 1;
-              }
-              if ($mtls_ok = 0) {
-                  return 403 'mTLS client certificate required';
-              }
+              try_files $uri $uri/ =404;
+          }
+      }
+
+      # ──────────────────────────────────────────────────────────────
+      # Port 8443 — Direct internal mTLS listener
+      # ──────────────────────────────────────────────────────────────
+      # Real mutual TLS: nginx itself requests and validates the client
+      # certificate during the TLS handshake. Used by internal callers
+      # (jumpbox, Bastion tunnels) that connect directly to the VM.
+      # ──────────────────────────────────────────────────────────────
+      server {
+          listen 8443 ssl;
+          server_name _;
+
+          ssl_certificate /etc/nginx/ssl/server.crt;
+          ssl_certificate_key /etc/nginx/ssl/server.key;
+          ssl_client_certificate /etc/nginx/ssl/ca.crt;
+          ssl_verify_client on;
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_ciphers HIGH:!aNULL:!MD5;
+
+          root /var/www/html;
+          index index.html;
+
+          # Diagnostic endpoint — returns native nginx mTLS variables
+          location = /whoami {
+              default_type application/json;
+              return 200
+              '{'
+              '"listener":"direct-8443",'
+              '"remote_addr":"$remote_addr",'
+              '"host":"$host",'
+              '"ssl_client_verify":"$ssl_client_verify",'
+              '"ssl_client_s_dn":"$ssl_client_s_dn",'
+              '"ssl_client_i_dn":"$ssl_client_i_dn",'
+              '"ssl_client_fingerprint":"$ssl_client_fingerprint",'
+              '"ssl_client_serial":"$ssl_client_serial"'
+              '}';
+          }
+
+          location / {
+              # ssl_verify_client on already rejects connections without a valid cert (403)
               try_files $uri $uri/ =404;
           }
       }
@@ -124,7 +188,14 @@ write_files:
 
 runcmd:
   - mkdir -p /etc/nginx/ssl
+  # Generate temporary self-signed certs so nginx can start the HTTPS block at boot.
+  # Step 9 of deploy.sh replaces these with the real CA-signed certs.
+  - openssl req -x509 -nodes -days 1 -newkey rsa:2048 -keyout /etc/nginx/ssl/server.key -out /etc/nginx/ssl/server.crt -subj '/CN=placeholder'
+  - cp /etc/nginx/ssl/server.crt /etc/nginx/ssl/ca.crt
+  - chmod 600 /etc/nginx/ssl/server.key
+  - chown -R www-data:www-data /etc/nginx/ssl
   - chown -R www-data:www-data /var/www/html
   - chmod 755 /var/www/html
   - systemctl enable nginx
+  - systemctl start nginx
   - echo "Host2 cloud-init complete" > /var/log/cloud-init-done.log

@@ -42,7 +42,7 @@ command_exists() {
 }
 
 # Check prerequisites
-echo -e "${YELLOW}[STEP 1/9] Checking prerequisites...${NC}"
+echo -e "${YELLOW}[STEP 1/10] Checking prerequisites...${NC}"
 
 if ! command_exists az; then
     echo -e "${RED}Error: Azure CLI is not installed${NC}"
@@ -64,7 +64,7 @@ fi
 echo -e "${GREEN}✓ All prerequisites met${NC}"
 
 # Check Azure login
-echo -e "${YELLOW}[STEP 2/9] Checking Azure authentication...${NC}"
+echo -e "${YELLOW}[STEP 2/10] Checking Azure authentication...${NC}"
 if ! az account show &>/dev/null; then
     echo -e "${YELLOW}Not logged in. Initiating Azure login...${NC}"
     az login
@@ -275,39 +275,82 @@ EOFSCRIPT
     CHAIN_CERT=$(cat certs/${CERT_NAME}.crt certs/ca.crt | base64 -w 0)
     SERVER_KEY=$(cat certs/${CERT_NAME}.key | base64 -w 0)
 
-    # Generate nginx config that checks the X-Client-Cert header injected by App Gateway
-    # via the 'client_certificate' mutual-authentication server variable rewrite rule.
+    # Generate nginx config with two HTTPS listeners:
+    #  - Port 443: App Gateway facing (ssl_verify_client off, header-based mTLS)
+    #  - Port 8443: Direct internal mTLS (ssl_verify_client on, real TLS handshake)
     NGINX_CFG=$(cat << 'NGINXEOF'
+# Port 443 — Application Gateway facing listener
+# ssl_verify_client off; App Gateway handles client cert handshake.
+# Certificate metadata arrives as HTTP headers via AppGW rewrite rules.
+# Only the App Gateway subnet (10.0.1.0/24) is allowed to connect.
 server {
     listen 443 ssl;
     server_name _;
     ssl_certificate /etc/nginx/ssl/server.crt;
     ssl_certificate_key /etc/nginx/ssl/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_verify_client off;
+    allow 10.0.1.0/24;
+    deny all;
+    root /var/www/html;
+    index index.html;
+    location = /healthz {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+    location = /whoami {
+        default_type application/json;
+        return 200
+        '{'
+        '"listener":"appgw-443",'
+        '"remote_addr":"$remote_addr",'
+        '"host":"$host",'
+        '"request_uri":"$request_uri",'
+        '"x_forwarded_for":"$http_x_forwarded_for",'
+        '"x_forwarded_proto":"$http_x_forwarded_proto",'
+        '"x_client_cert_verify":"$http_x_client_cert_verify",'
+        '"x_client_cert_subject":"$http_x_client_cert_subject",'
+        '"x_client_cert_issuer":"$http_x_client_cert_issuer",'
+        '"x_client_cert_fingerprint":"$http_x_client_cert_fingerprint",'
+        '"x_client_cert_present":"$http_x_client_cert"'
+        '}';
+    }
+    location / {
+        if ($http_x_client_cert = "") {
+            return 403 'mTLS client certificate required (via Application Gateway)';
+        }
+        try_files $uri $uri/ =404;
+    }
+}
+# Port 8443 — Direct internal mTLS listener
+# Real mutual TLS: nginx requests and validates the client certificate.
+server {
+    listen 8443 ssl;
+    server_name _;
+    ssl_certificate /etc/nginx/ssl/server.crt;
+    ssl_certificate_key /etc/nginx/ssl/server.key;
     ssl_client_certificate /etc/nginx/ssl/ca.crt;
-    ssl_verify_client optional;
+    ssl_verify_client on;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
     root /var/www/html;
     index index.html;
-    location = /health {
-        return 200 'OK';
-        add_header Content-Type text/plain;
+    location = /whoami {
+        default_type application/json;
+        return 200
+        '{'
+        '"listener":"direct-8443",'
+        '"remote_addr":"$remote_addr",'
+        '"host":"$host",'
+        '"ssl_client_verify":"$ssl_client_verify",'
+        '"ssl_client_s_dn":"$ssl_client_s_dn",'
+        '"ssl_client_i_dn":"$ssl_client_i_dn",'
+        '"ssl_client_fingerprint":"$ssl_client_fingerprint",'
+        '"ssl_client_serial":"$ssl_client_serial"'
+        '}';
     }
     location / {
-        # Dual-path mTLS check:
-        #  - Direct connection: nginx prompts & validates via TLS ($ssl_client_verify = SUCCESS)
-        #  - Via App Gateway:   AppGW injects the client cert PEM as X-Client-Cert header
-        #    (Passthrough mode + 'client_certificate' mutual-auth server variable rewrite rule)
-        set $mtls_ok 0;
-        if ($ssl_client_verify = "SUCCESS") {
-            set $mtls_ok 1;
-        }
-        if ($http_x_client_cert != "") {
-            set $mtls_ok 1;
-        }
-        if ($mtls_ok = 0) {
-            return 403 'mTLS client certificate required';
-        }
         try_files $uri $uri/ =404;
     }
 }
@@ -339,11 +382,13 @@ deploy_certs_to_vm "$HOST2_NAME" "host2"
 echo -e "${GREEN}✓ Certificates and nginx config deployed to all VMs${NC}"
 
 # App Gateway mTLS is configured via Bicep (API 2025-03-01):
-# - SSL profile 'mtls-passthrough-profile' with VerifyClientAuthMode=Passthrough on the HTTPS listener
-# - Rewrite rule set 'mtls-cert-forward' injects the client certificate PEM as the
-#   X-Client-Cert HTTP header using the 'client_certificate' mutual-authentication server variable.
-# - Nginx backends check for the X-Client-Cert header to enforce mTLS.
-echo -e "${GREEN}✓ App Gateway mTLS Passthrough + client certificate forwarding configured via Bicep${NC}"
+# - Two SSL profiles: 'mtls-passthrough-profile' (Passthrough) and 'mtls-strict-profile' (Enabled)
+# - HTTPS listener currently uses Passthrough; switch to Strict by changing the sslProfile reference
+# - Rewrite rule set 'mtls-cert-forward' injects X-Client-Cert, X-Client-Cert-Verify,
+#   X-Client-Cert-Subject, X-Client-Cert-Issuer, X-Client-Cert-Fingerprint headers
+# - Backend nginx :443 validates via headers (ssl_verify_client off) — AppGW-only access
+# - Backend nginx :8443 does real mTLS (ssl_verify_client on) — direct internal access
+echo -e "${GREEN}✓ App Gateway mTLS + dual-listener nginx configured via Bicep${NC}"
 
 # Install client certificates on Windows jumpbox
 echo -e "${YELLOW}[STEP 10/10] Installing client certificates on Windows jumpbox ($JUMPBOX_NAME)...${NC}"
@@ -421,19 +466,26 @@ echo -e "  🖥️  Jumpbox:      $JUMPBOX_NAME ($JUMPBOX_IP)"
 echo ""
 echo -e "${YELLOW}Next Steps:${NC}"
 echo "1. Wait a few minutes for all services to fully start"
-echo "2. Test the Application Gateway HTTPS endpoint:"
-echo -e "   ${GREEN}curl -k https://$APP_GW_FQDN${NC}"
 echo ""
-echo "3. Test with the client certificate (full mTLS):"
+echo -e "${YELLOW}Path 1 — Via Application Gateway (port 443, header-based mTLS):${NC}"
+echo "2. Test without client cert (should get 403 from backend):"
+echo -e "   ${GREEN}curl -k https://$APP_GW_FQDN${NC}"
+echo "3. Test with client cert (full mTLS via AppGW Passthrough):"
 echo -e "   ${GREEN}curl --cert certs/appgw-client.crt --key certs/appgw-client.key --cacert certs/ca.crt https://$APP_GW_FQDN${NC}"
+echo "4. Check forwarded certificate headers via /whoami:"
+echo -e "   ${GREEN}curl --cert certs/appgw-client.crt --key certs/appgw-client.key --cacert certs/ca.crt https://$APP_GW_FQDN/whoami${NC}"
+echo ""
+echo -e "${YELLOW}Path 2 — Direct internal mTLS (port 8443, real TLS handshake):${NC}"
+echo "5. From jumpbox, test direct mTLS to backend (nginx prompts for client cert):"
+echo -e "   ${GREEN}curl --cert C:\\certs\\appgw-client.crt --key C:\\certs\\appgw-client.key --cacert C:\\certs\\ca.crt https://<backend-ip>:8443${NC}"
+echo "6. Check native nginx mTLS variables via /whoami:"
+echo -e "   ${GREEN}curl --cert C:\\certs\\appgw-client.crt --key C:\\certs\\appgw-client.key --cacert C:\\certs\\ca.crt https://<backend-ip>:8443/whoami${NC}"
 echo ""
 echo -e "${YELLOW}Accessing Windows Jumpbox via Azure Bastion (RDP):${NC}"
 echo "  Retrieve jumpbox admin password:"
 echo -e "   ${GREEN}az keyvault secret show --vault-name $KEY_VAULT_NAME --name jumpbox-admin-password --query value -o tsv${NC}"
 echo "  Username: jumpboxadmin"
 echo "  Client certs pre-installed in C:\\certs\\ and Windows certificate store"
-echo "  Test mTLS from jumpbox with curl:"
-echo -e "   ${GREEN}curl --cert C:\\certs\\appgw-client.crt --key C:\\certs\\appgw-client.key --cacert C:\\certs\\ca.crt https://<backend-private-ip>${NC}"
 echo ""
 echo -e "${YELLOW}Accessing VMs via Azure Bastion (SSH credentials from Key Vault):${NC}"
 echo "  Retrieve the SSH private key:"

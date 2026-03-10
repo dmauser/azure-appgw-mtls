@@ -128,13 +128,39 @@ resource nsgBackend 'Microsoft.Network/networkSecurityGroups@2023-05-01' = {
           sourceAddressPrefix: appGwSubnetPrefix
           sourcePortRange: '*'
           destinationAddressPrefix: '*'
-          destinationPortRange: '443'
+          destinationPortRange: '443' // App Gateway → backend (health probes + traffic)
+        }
+      }
+      {
+        name: 'Allow-mTLS-Direct-Jumpbox'
+        properties: {
+          priority: 110
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: jumpboxSubnetPrefix
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '8443' // Direct mTLS port for internal callers
+        }
+      }
+      {
+        name: 'Allow-mTLS-Direct-Bastion'
+        properties: {
+          priority: 115
+          direction: 'Inbound'
+          access: 'Allow'
+          protocol: 'Tcp'
+          sourceAddressPrefix: bastionSubnetPrefix
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '8443' // Direct mTLS port via Bastion tunnel
         }
       }
       {
         name: 'Allow-SSH-Bastion'
         properties: {
-          priority: 110
+          priority: 120
           direction: 'Inbound'
           access: 'Allow'
           protocol: 'Tcp'
@@ -142,19 +168,6 @@ resource nsgBackend 'Microsoft.Network/networkSecurityGroups@2023-05-01' = {
           sourcePortRange: '*'
           destinationAddressPrefix: '*'
           destinationPortRange: '22'
-        }
-      }
-      {
-        name: 'Allow-HTTPS-Jumpbox'
-        properties: {
-          priority: 120
-          direction: 'Inbound'
-          access: 'Allow'
-          protocol: 'Tcp'
-          sourceAddressPrefix: jumpboxSubnetPrefix
-          sourcePortRange: '*'
-          destinationAddressPrefix: '*'
-          destinationPortRange: '443'
         }
       }
       {
@@ -547,8 +560,11 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
         }
       }
     ]
-    // mTLS Passthrough SSL profile: gateway requests a client cert but does NOT validate it.
-    // Certificate validation and policy enforcement are delegated to the backend servers.
+    // mTLS SSL profiles — two modes supported:
+    //  1. Passthrough: gateway requests a client cert but does NOT validate it;
+    //     the raw certificate is forwarded to the backend via rewrite rules.
+    //  2. Strict: gateway validates the client cert against a trusted CA before
+    //     forwarding traffic. Headers are still injected via the same rewrite rules.
     sslProfiles: [
       {
         name: 'mtls-passthrough-profile'
@@ -558,6 +574,30 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
             verifyClientRevocation: 'None'
             verifyClientAuthMode: 'Passthrough'
           }
+        }
+      }
+      {
+        name: 'mtls-strict-profile'
+        properties: {
+          clientAuthConfiguration: {
+            verifyClientCertIssuerDN: true
+            verifyClientRevocation: 'None'
+            verifyClientAuthMode: 'Enabled'
+          }
+          trustedClientCertificates: [
+            {
+              id: resourceId('Microsoft.Network/applicationGateways/trustedClientCertificates', appGwName, 'trusted-client-ca')
+            }
+          ]
+        }
+      }
+    ]
+    // Trusted client CA certificate — used by the Strict SSL profile to validate incoming client certs
+    trustedClientCertificates: [
+      {
+        name: 'trusted-client-ca'
+        properties: {
+          data: caCertData
         }
       }
     ]
@@ -592,6 +632,8 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
           protocol: 'Https'
           cookieBasedAffinity: 'Disabled'
           requestTimeout: 30
+          // Hostname must match the backend server certificate CN/SAN
+          hostName: 'backend.contoso.com'
           pickHostNameFromBackendAddress: false
           trustedRootCertificates: [
             {
@@ -654,6 +696,22 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
                     headerName: 'X-Client-Cert'
                     headerValue: '{var_client_certificate}'
                   }
+                  {
+                    headerName: 'X-Client-Cert-Verify'
+                    headerValue: '{var_client_certificate_verification}'
+                  }
+                  {
+                    headerName: 'X-Client-Cert-Subject'
+                    headerValue: '{var_client_certificate_subject}'
+                  }
+                  {
+                    headerName: 'X-Client-Cert-Issuer'
+                    headerValue: '{var_client_certificate_issuer}'
+                  }
+                  {
+                    headerName: 'X-Client-Cert-Fingerprint'
+                    headerValue: '{var_client_certificate_fingerprint}'
+                  }
                 ]
               }
             }
@@ -704,13 +762,14 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
       {
         name: 'health-probe'
         properties: {
+          // HTTPS probe on port 443 — the backend :443 listener does NOT require client certs
+          // (ssl_verify_client off), so the health probe succeeds without mTLS.
           protocol: 'Https'
-          path: '/health'
+          path: '/healthz'
           interval: 30
           timeout: 30
           unhealthyThreshold: 3
-          pickHostNameFromBackendHttpSettings: false
-          host: 'backend.contoso.com'
+          pickHostNameFromBackendHttpSettings: true
           match: {
             statusCodes: [
               '200-399'
