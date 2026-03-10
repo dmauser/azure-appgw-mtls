@@ -582,7 +582,7 @@ resource applicationGateway 'Microsoft.Network/applicationGateways@2025-03-01' =
           clientAuthConfiguration: {
             verifyClientCertIssuerDN: true
             verifyClientRevocation: 'None'
-            verifyClientAuthMode: 'Optional'
+            verifyClientAuthMode: 'Strict'
           }
           trustedClientCertificates: [
             {
